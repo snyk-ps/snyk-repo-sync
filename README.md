@@ -4,6 +4,8 @@ Queue-driven worker that consumes repository lifecycle events from Azure Service
 
 External systems (ADO service hooks, GitHub webhooks, Event Grid) publish transport messages to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice validates transport envelopes and completes messages; normalization and Snyk sync follow in a subsequent change.
 
+**Operators:** queue and ingress setup (Service Bus, ADO service hooks, Event Grid audit stream) are documented in **[INGESTION.md](INGESTION.md)**.
+
 ## Table of contents
 
 - [Installation and setup](#installation-and-setup)
@@ -13,7 +15,7 @@ External systems (ADO service hooks, GitHub webhooks, Event Grid) publish transp
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Deployment](#deployment)
-- [More documentation](#more-documentation)
+- [More documentation](#more-documentation) — includes [INGESTION.md](INGESTION.md) for Service Bus and ADO ingress
 
 ## Installation and setup
 
@@ -130,6 +132,7 @@ The Docker image entrypoint is `python src/main.py worker run`. Sizing, Dockerfi
 
 | Document | Audience |
 | -------- | -------- |
+| **[INGESTION.md](INGESTION.md)** | Service Bus, ADO service hooks, and Event Grid / audit stream setup |
 | **[CONFIGURATION.md](CONFIGURATION.md)** | Environment variables, CLI commands, transport envelope schema |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | Project layout, OpenSpec workflow, tests, CI/Docker |
 | **[openspec/SPEC.md](openspec/SPEC.md)** | Capability specifications |

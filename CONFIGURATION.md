@@ -1,6 +1,6 @@
 # Configuration reference
 
-Operator reference for environment variables and CLI commands. For installation, usage, and deployment, see the [README](README.md). For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Operator reference for environment variables and CLI commands. For installation, usage, and deployment, see the [README](README.md). For Service Bus provisioning, ADO service hooks, and Event Grid / audit stream setup, see **[INGESTION.md](INGESTION.md)**. For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 The worker Container App is configured entirely via environment secrets injected at deployment time. There is no configuration file.
 
@@ -40,7 +40,7 @@ Queue message bodies MUST be JSON objects with:
 | `receivedAt` | ISO-8601 UTC | When the external ingress path accepted the event |
 | `rawPayload` | object | Provider-native event body |
 
-See `openspec/specs/event-ingestion/spec.md` for the canonical contract.
+See `openspec/specs/event-ingestion/spec.md` for the canonical contract. Step-by-step ingress setup (Service Bus, service hooks, audit stream): **[INGESTION.md](INGESTION.md)**.
 
 ## Error handling and logging
 
