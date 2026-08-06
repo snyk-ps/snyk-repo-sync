@@ -29,7 +29,7 @@ GitHub App or PAT credentials used for webhook registration and optional metadat
 When webhook payloads lack fields required by downstream handlers, an optional GitHub integration client MAY call the GitHub REST or App API to enrich metadata before or during worker processing.
 
 #### Scenario: Missing metadata in webhook
-- **WHEN** the worker needs repository metadata not present in the normalized envelope
+- **WHEN** the worker needs repository metadata not present in the normalized event
 - **THEN** it may call GitHub API using configured credentials without logging secrets
 
 ### Requirement: Default branch detection mode

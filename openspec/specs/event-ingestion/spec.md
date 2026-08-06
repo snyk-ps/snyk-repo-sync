@@ -1,33 +1,30 @@
 ## Purpose
 
-Ingest ADO service hook and audit stream events and publish normalized messages to a single Service Bus queue shared with GitHub webhook ingress.
+Deliver ADO service hook and audit stream events to a single Service Bus queue shared with GitHub webhook ingress. Ingress is customer-owned infrastructure; it validates and forwards provider-native payloads without lifecycle normalization.
 
 ## Requirements
 
-### Requirement: Multi-source normalized envelope
-All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a normalized envelope that includes: `source`, `eventId`, `eventType`, `scopeId`, `repositoryId` (when applicable), `occurredAt`, and event-specific `payload` fields required by downstream handlers.
+### Requirement: Multi-source transport envelope
+All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the PS-maintained worker application.
 
-| Field          | ADO                  | GitHub                 |
-| -------------- | -------------------- | ---------------------- |
-| `source`       | `"ado"`              | `"github"`             |
-| `eventId`      | hook or audit id     | GitHub delivery GUID   |
-| `eventType`    | `repo.created`, etc. | same lifecycle types   |
-| `scopeId`      | ADO project ID       | GitHub org ID          |
-| `repositoryId` | ADO repository ID    | GitHub repo ID (numeric) |
-| `occurredAt`   | event timestamp      | webhook timestamp      |
-| `payload`      | ADO-specific extras  | repo name, default branch, etc. |
+| Field         | ADO                              | GitHub                          |
+| ------------- | -------------------------------- | ------------------------------- |
+| `source`      | `"ado"`                          | `"github"`                      |
+| `ingressId`   | service hook or audit event id   | `X-GitHub-Delivery` GUID        |
+| `receivedAt`  | ingress receive timestamp        | ingress receive timestamp       |
+| `rawPayload`  | ADO service hook or audit body   | GitHub webhook JSON body        |
 
 #### Scenario: ADO service hook repo lifecycle event
 - **WHEN** ADO emits a service hook for repository created, renamed, or deleted
-- **THEN** the ingress path publishes one normalized message with `source: "ado"` to the Service Bus queue
+- **THEN** the ingress path publishes one transport message with `source: "ado"` and the raw hook payload to the Service Bus queue
 
 #### Scenario: Audit stream default branch event
 - **WHEN** ADO audit stream reports a repository default branch change
-- **THEN** Event Grid (audit subscriber) publishes one normalized message with `source: "ado"` to the same Service Bus queue
+- **THEN** Event Grid forwards one transport message with `source: "ado"` and the raw audit payload to the same Service Bus queue
 
 #### Scenario: GitHub webhook lifecycle event
-- **WHEN** a GitHub repository lifecycle webhook is normalized by github-webhook-ingestion
-- **THEN** the message includes `source: "github"` and GitHub org/repository IDs in the shared envelope
+- **WHEN** GitHub delivers a repository lifecycle webhook accepted by github-webhook-ingestion
+- **THEN** the message includes `source: "github"`, the delivery GUID as `ingressId`, and the raw webhook body in `rawPayload`
 
 ### Requirement: Cloud ADO only
 ADO event ingestion MUST support Azure DevOps Cloud (`dev.azure.com`) only.
@@ -35,10 +32,3 @@ ADO event ingestion MUST support Azure DevOps Cloud (`dev.azure.com`) only.
 #### Scenario: On-premises ADO event
 - **WHEN** an event originates from ADO Server (on-premises)
 - **THEN** the system does not ingest or process it (out of scope)
-
-### Requirement: Optional audit normalizer
-When an audit-stream normalizer function is deployed, it MUST transform raw audit payloads into the normalized envelope before queue publish.
-
-#### Scenario: Normalizer present
-- **WHEN** a default-branch audit event passes through the normalizer
-- **THEN** the message on the queue conforms to the same envelope schema as service hook messages

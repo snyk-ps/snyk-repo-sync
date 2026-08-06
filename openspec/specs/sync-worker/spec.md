@@ -1,6 +1,6 @@
 ## Purpose
 
-Queue-driven worker that validates state, routes repo lifecycle events by source, enforces idempotency, and handles retries and dead-lettering.
+Queue-driven worker that normalizes provider events, validates state, routes repo lifecycle events by source, enforces idempotency, and handles retries and dead-lettering. Event normalization is owned by this PS-maintained application so lifecycle mapping ships with worker releases rather than customer-owned ingress infrastructure.
 
 ## Requirements
 
@@ -8,18 +8,47 @@ Queue-driven worker that validates state, routes repo lifecycle events by source
 The worker MUST consume messages from the Service Bus queue on demand; it MUST NOT rely on always-on polling of ADO, GitHub, or Snyk as its primary trigger.
 
 #### Scenario: Message available
-- **WHEN** a normalized event message is available on the queue
+- **WHEN** a transport message is available on the queue
 - **THEN** the worker receives and processes it
 
+### Requirement: Multi-source event normalization
+The worker MUST parse transport messages from ADO and GitHub and produce a normalized internal event model before state access or lifecycle actions. The normalized model MUST include: `source`, `eventId`, `eventType`, `scopeId`, `repositoryId` (when applicable), `occurredAt`, and event-specific `payload` fields required by downstream handlers.
+
+| Field          | ADO                  | GitHub                 |
+| -------------- | -------------------- | ---------------------- |
+| `source`       | `"ado"`              | `"github"`             |
+| `eventId`      | hook or audit id     | GitHub delivery GUID   |
+| `eventType`    | `repo.created`, etc. | same lifecycle types   |
+| `scopeId`      | ADO project ID       | GitHub org ID          |
+| `repositoryId` | ADO repository ID    | GitHub repo ID (numeric) |
+| `occurredAt`   | event timestamp      | webhook timestamp      |
+| `payload`      | ADO-specific extras  | repo name, default branch, etc. |
+
+#### Scenario: ADO service hook normalized to repo created
+- **WHEN** the worker receives a transport message with `source: "ado"` containing a repository-created service hook payload
+- **THEN** it produces a normalized event with `eventType: repo.created` before further processing
+
+#### Scenario: ADO audit stream normalized to default branch changed
+- **WHEN** the worker receives a transport message with `source: "ado"` containing a default-branch audit payload
+- **THEN** it produces a normalized event with `eventType: repo.default_branch_changed` before further processing
+
+#### Scenario: GitHub webhook normalized to repo renamed
+- **WHEN** the worker receives a transport message with `source: "github"` containing a `repository` webhook with action `renamed`
+- **THEN** it produces a normalized event with `eventType: repo.renamed` before further processing
+
+#### Scenario: Unrecognized or unsupported provider payload
+- **WHEN** the worker cannot parse a transport message or the event is not a supported repository lifecycle change
+- **THEN** it completes the message without lifecycle side effects or dead-letters the message when parsing is unrecoverably invalid
+
 ### Requirement: Source-aware processing flow
-For each message, the worker MUST: route by `source` to load the correct `_meta` partition; read repository state (if applicable); perform idempotency check; execute the mapped action; update repository state; complete or dead-letter the message.
+For each normalized event, the worker MUST: route by `source` to load the correct `_meta` partition; read repository state (if applicable); perform idempotency check; execute the mapped action; update repository state; complete or dead-letter the message.
 
 #### Scenario: Successful ADO repo create
-- **WHEN** a repo-created message with `source: "ado"` passes idempotency checks
+- **WHEN** a repo-created event with `source: "ado"` passes idempotency checks
 - **THEN** the worker imports and tags the target, updates repo state, and completes the message
 
 #### Scenario: Successful GitHub repo create
-- **WHEN** a repo-created message with `source: "github"` passes idempotency checks
+- **WHEN** a repo-created event with `source: "github"` passes idempotency checks
 - **THEN** the worker imports and tags the target, updates repo state, and completes the message
 
 ### Requirement: Idempotency by event and desired state

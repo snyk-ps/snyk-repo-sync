@@ -9,7 +9,7 @@ Service hooks for repository created, renamed, and deleted MUST be provisioned b
 
 #### Scenario: Initial project setup
 - **WHEN** an operator runs the provisioning pipeline for an ADO project
-- **THEN** the required service hooks are registered to forward events to the ingestion endpoint, which publishes normalized messages with `source: "ado"` to the Service Bus queue
+- **THEN** the required service hooks are registered to forward events to the ingestion endpoint, which publishes transport messages with `source: "ado"` and raw hook payloads to the Service Bus queue
 
 ### Requirement: Audit stream provisioning by PS
 Default-branch audit stream subscription MUST be deployed by Snyk Professional Services (not customer self-service in v1).
@@ -22,7 +22,7 @@ Default-branch audit stream subscription MUST be deployed by Snyk Professional S
 ADO PAT MUST be used for metadata enrichment and reconciliation operations requiring ADO REST API access; it MUST be stored in Key Vault or container secrets.
 
 #### Scenario: Enrichment during processing
-- **WHEN** the worker needs ADO metadata not present in the event envelope
+- **WHEN** the worker needs ADO metadata not present in the normalized event
 - **THEN** it calls ADO REST API using the configured PAT without logging credentials
 
 ### Requirement: Default branch detection mode
