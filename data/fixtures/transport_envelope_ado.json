@@ -1,0 +1,18 @@
+{
+  "source": "ado",
+  "ingressId": "ado-hook-repo-created-001",
+  "receivedAt": "2026-08-05T18:00:00Z",
+  "rawPayload": {
+    "eventType": "git.repo.created",
+    "resource": {
+      "repository": {
+        "id": "repo-guid-001",
+        "name": "sample-repo",
+        "project": {
+          "id": "project-guid-001",
+          "name": "Sample Project"
+        }
+      }
+    }
+  }
+}

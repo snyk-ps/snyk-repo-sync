@@ -1,62 +1,59 @@
 # Configuration reference
 
-Operator reference for configuration files, environment variables, and CLI flags. For installation, usage, and deployment, see the [README](README.md). For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Operator reference for environment variables and CLI commands. For installation, usage, and deployment, see the [README](README.md). For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
-Replace this document with your application's real configuration reference as you implement features.
-
-## Precedence
-
-When the same logical setting exists in more than one place, document the resolution order for your application (**later wins** is a common pattern):
-
-1. Built-in defaults
-2. Configuration file (if your app uses one)
-3. Environment variables
-4. **CLI arguments** (highest precedence; useful for local smoke tests without editing files)
-
-For **deployments**, keep authoritative values in configuration files or platform-injected environment. Use **CLI overrides** mainly for **local development** and one-off commands.
-
-## Configuration files
-
-Replace with the configuration files your application reads (for example YAML, TOML, or JSON under `src/config/`). Document each top-level key and nested fields in tables below as you add them.
-
-Start from any sample config you ship under **`data/`** (add one when your app needs it).
+The worker Container App is configured entirely via environment secrets injected at deployment time. There is no configuration file.
 
 ## Environment variables
 
-**Secrets** (API tokens, passwords, and similar) **must** come from environment variables or your secret store. **Never** commit them in configuration files or source.
+**Secrets** must come from the Container App secret store or your platform's equivalent. **Never** commit them in source or logs.
 
-| Variable | Required | Role |
-| -------- | -------- | ---- |
-| **`SNYK_TOKEN`** | When calling Snyk APIs | Snyk API token (**secret**; never commit). |
+| Variable | Required | Secret | Role |
+| -------- | -------- | ------ | ---- |
+| **`SERVICEBUS_CONNECTION_STRING`** | Yes | Yes | Azure Service Bus namespace connection string for the **existing** queue |
+| **`SERVICEBUS_QUEUE_NAME`** | Yes | No | Name of the pre-provisioned queue the worker consumes |
+| **`SNYK_TOKEN`** | For Snyk sync (future) | Yes | Snyk API token |
 
-Add rows for every environment variable your application supports. Document defaults, overrides, and whether each value is secret or non-secret.
+The worker fails fast at startup when `SERVICEBUS_CONNECTION_STRING` or `SERVICEBUS_QUEUE_NAME` is missing or empty.
 
-## CLI flags and parameters
+## CLI commands
 
-The scaffold entry point is **`src/main.py`**. Document each important CLI flag: purpose, default, and examples.
-
-Run:
-
-```bash
-uv run python src/main.py --help
-```
-
-Replace the placeholder table below as you add `argparse` arguments.
-
-| Flag / parameter | Default | Purpose |
-| ---------------- | ------- | ------- |
-| *(add flags here)* | | |
-
-## Commands
-
-Document each CLI subcommand as you implement it: required configuration, secrets, and typical examples.
-
-Example (scaffold only):
+Entry point: **`src/main.py`**
 
 ```bash
 uv run python src/main.py --help
+uv run python src/main.py worker run
 ```
+
+| Command | Purpose |
+| ------- | ------- |
+| **`worker run`** | Long-running Service Bus consumer; validates transport envelopes and completes messages (slice 1; normalization deferred) |
+
+## Transport envelope
+
+Queue message bodies MUST be JSON objects with:
+
+| Field | Type | Description |
+| ----- | ---- | ----------- |
+| `source` | `"ado"` or `"github"` | Event origin |
+| `ingressId` | string | Provider event or delivery identifier |
+| `receivedAt` | ISO-8601 UTC | When the external ingress path accepted the event |
+| `rawPayload` | object | Provider-native event body |
+
+See `openspec/specs/event-ingestion/spec.md` for the canonical contract.
 
 ## Error handling and logging
 
-Replace with how errors and logs behave, where logs go, and JSON log format if applicable. Cross-link from the [README troubleshooting section](README.md#troubleshooting) when you have operator-facing runbooks.
+- Malformed transport envelopes are **dead-lettered** with reason `InvalidEnvelope`.
+- Valid envelopes are **completed** without normalization or Snyk side effects in the current implementation slice.
+- Logs include `source`, `ingress_id`, and queue name only — never connection strings or other secrets.
+
+## Integration tests
+
+Integration tests require a configured Service Bus namespace and queue. See **[CONTRIBUTING.md § Integration tests](CONTRIBUTING.md#integration-tests)**.
+
+```bash
+export SERVICEBUS_CONNECTION_STRING="..."
+export SERVICEBUS_QUEUE_NAME="repo-sync-events"
+uv run pytest -m integration
+```

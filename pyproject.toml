@@ -1,0 +1,21 @@
+[project]
+name = "snyk-azure-repo-sync"
+version = "0.1.0"
+description = "Queue-driven worker for ADO and GitHub repository lifecycle sync with Snyk."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-servicebus>=7.12.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "integration: tests requiring Service Bus configuration",
+]

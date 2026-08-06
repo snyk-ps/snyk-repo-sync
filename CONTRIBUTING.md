@@ -67,6 +67,20 @@ Do not commit secrets. Use environment variables (for example **`SNYK_TOKEN`**) 
 uv run pytest
 ```
 
+Unit tests run by default. Integration tests are marked with `@pytest.mark.integration` and require Service Bus configuration.
+
+```bash
+# Unit tests only
+uv run pytest -m "not integration"
+
+# Integration tests (requires existing queue)
+export SERVICEBUS_CONNECTION_STRING="Endpoint=sb://..."
+export SERVICEBUS_QUEUE_NAME="repo-sync-events"
+uv run pytest -m integration
+```
+
+Integration tests publish transport envelope fixtures from `data/fixtures/` to the configured queue and assert the worker completes them. Use a dedicated test namespace or the [Azure Service Bus emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/test-locally-with-service-bus-emulator) — never run integration tests against production queues without understanding side effects.
+
 Add test runners and tools as dev dependencies in `pyproject.toml` and sync with uv. Configure pytest so **`src`** is on the import path (for example `pythonpath = ["src"]` and `testpaths = ["tests"]` under `[tool.pytest.ini_options]`).
 
 ## Test layout
