@@ -1,9 +1,7 @@
 ## Purpose
 
 Deliver ADO service hook and audit stream events to a single Service Bus queue shared with GitHub webhook ingress. Ingress is customer-owned infrastructure; it validates and forwards provider-native payloads without lifecycle normalization.
-
 ## Requirements
-
 ### Requirement: Multi-source transport envelope
 All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the PS-maintained worker application.
 
@@ -32,3 +30,18 @@ ADO event ingestion MUST support Azure DevOps Cloud (`dev.azure.com`) only.
 #### Scenario: On-premises ADO event
 - **WHEN** an event originates from ADO Server (on-premises)
 - **THEN** the system does not ingest or process it (out of scope)
+
+### Requirement: Worker-side transport consumption
+The worker application MUST consume transport messages from the same Service Bus queue that external ingress paths publish to. The worker MUST deserialize messages using the transport envelope schema (`source`, `ingressId`, `receivedAt`, `rawPayload`).
+
+#### Scenario: Worker receives published transport message
+- **WHEN** an external ingress path publishes a transport message to the queue
+- **THEN** the worker container can receive and deserialize that message
+
+### Requirement: Existing queue only
+Queue infrastructure MUST be provisioned outside this repository. The worker MUST reference the existing queue via environment configuration and MUST NOT create or manage Service Bus resources.
+
+#### Scenario: No queue provisioning in worker
+- **WHEN** the worker application is deployed
+- **THEN** it connects to the pre-existing queue without creating queue infrastructure
+
