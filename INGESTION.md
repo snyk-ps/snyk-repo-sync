@@ -256,12 +256,18 @@ Use an ingress component (recommended: **Azure Function** with Event Grid trigge
 
 | Field | Use |
 | ----- | --- |
-| `ProjectId` | ADO scope (`scopeId`) |
-| `Data.RepoId` | Repository id |
-| `Data.RepoName` | Repository name |
-| `Data.DefaultBranch` | New default branch (`refs/heads/...`) |
-| `Data.PreviousDefaultBranch` | Previous default branch |
-| `Timestamp` | Event time |
+| `ScopeId` | ADO org id → normalized `ado.orgId` |
+| `ScopeDisplayName` | ADO org display name → normalized `ado.orgDisplayName` |
+| `ProjectId` | ADO project id → normalized `scopeId` / `ado.projectId` |
+| `ProjectName` | ADO project name → normalized `ado.projectName` |
+| `Data.RepoId` | Repository id → normalized `repositoryId` |
+| `Data.RepoName` | Repository name → normalized `repository.name` |
+| `Data.PreviousRepoName` | Previous repo name on rename → normalized `payload.previousRepoName` |
+| `Data.DefaultBranch` | New default branch (`refs/heads/...`) → normalized `payload.defaultBranch` |
+| `Data.PreviousDefaultBranch` | Previous default branch → normalized `payload.previousDefaultBranch` |
+| `Timestamp` | Event time → normalized `occurredAt` |
+
+See **[CONFIGURATION.md](CONFIGURATION.md)** for the full normalized lifecycle event schema.
 
 ### Verify end-to-end
 
@@ -285,6 +291,7 @@ Use an ingress component (recommended: **Azure Function** with Event Grid trigge
 | Subscription never delivers | Advanced filter key wrong — use `data.ActionId`, not `ActionId` |
 | Lifecycle change in audit log but never on queue | Event Grid subscription missing; ingress handler not republishing |
 | Worker dead-letters with `InvalidEnvelope` | Queue message missing `source`, `ingressId`, `receivedAt`, or `rawPayload` |
+| Worker dead-letters with `InvalidNormalization` | ADO audit record unsupported or missing required org/project/repo/branch fields |
 
 ---
 

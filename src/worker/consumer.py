@@ -8,6 +8,7 @@ from azure.servicebus import ServiceBusClient, ServiceBusReceivedMessage
 from config.service_bus import ServiceBusSettings
 from worker.envelope import EnvelopeValidationError
 from worker.handler import handle_transport_message
+from worker.normalize import INVALID_NORMALIZATION_REASON, NormalizationError
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,17 @@ def process_message(message: ServiceBusReceivedMessage, receiver: QueueReceiver)
         receiver.dead_letter_message(
             message,
             reason="InvalidEnvelope",
+            error_description=str(exc),
+        )
+        return
+    except NormalizationError as exc:
+        logger.warning(
+            "Dead-lettering message with invalid normalization",
+            extra={"reason": str(exc)},
+        )
+        receiver.dead_letter_message(
+            message,
+            reason=INVALID_NORMALIZATION_REASON,
             error_description=str(exc),
         )
         return

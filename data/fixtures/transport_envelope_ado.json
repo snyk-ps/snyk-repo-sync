@@ -1,18 +1,21 @@
 {
   "source": "ado",
-  "ingressId": "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca",
-  "receivedAt": "2026-08-06T17:21:57.799Z",
+  "ingressId": "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f",
+  "receivedAt": "2026-08-06T17:31:52.327Z",
   "rawPayload": {
-    "Id": "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca",
+    "Id": "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f",
     "ActionId": "Git.RepositoryDefaultBranchChanged",
+    "ScopeId": "c638432a-7f35-450f-984f-372b9d46a376",
+    "ScopeDisplayName": "torstencannell (Organization)",
+    "ScopeType": 4,
     "ProjectId": "da9734d4-a91a-4f03-814b-ecc721fe24d1",
     "ProjectName": "snykDemoProject",
-    "Timestamp": "2026-08-06T17:21:57.7993795Z",
+    "Timestamp": "2026-08-06T17:31:52.3273845Z",
     "Data": {
       "RepoId": "90bd6b5e-0fbd-4edc-a10e-6604fe76027d",
       "RepoName": "juice-shop.git",
-      "DefaultBranch": "refs/heads/develop",
-      "PreviousDefaultBranch": "refs/heads/master"
+      "DefaultBranch": "refs/heads/master",
+      "PreviousDefaultBranch": "refs/heads/develop"
     }
   }
 }

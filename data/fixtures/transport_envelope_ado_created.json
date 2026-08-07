@@ -1,0 +1,20 @@
+{
+  "source": "ado",
+  "ingressId": "b1c2d3e4-0001-4000-8000-000000000001",
+  "receivedAt": "2026-08-06T17:00:00.000Z",
+  "rawPayload": {
+    "Id": "b1c2d3e4-0001-4000-8000-000000000001",
+    "ActionId": "Git.RepositoryCreated",
+    "ScopeId": "c638432a-7f35-450f-984f-372b9d46a376",
+    "ScopeDisplayName": "torstencannell (Organization)",
+    "ScopeType": 4,
+    "ProjectId": "da9734d4-a91a-4f03-814b-ecc721fe24d1",
+    "ProjectName": "snykDemoProject",
+    "Timestamp": "2026-08-06T17:00:00.0000000Z",
+    "Data": {
+      "RepoId": "11111111-1111-1111-1111-111111111111",
+      "RepoName": "new-repo.git",
+      "DefaultBranch": "refs/heads/main"
+    }
+  }
+}
