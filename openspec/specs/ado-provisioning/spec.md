@@ -1,22 +1,15 @@
 ## Purpose
 
-Provision ADO service hooks via pipeline script and audit stream via PS deployment.
+Provision ADO audit stream for Git repository lifecycle events per operator documentation.
 
 ## Requirements
 
-### Requirement: Service hook provisioning via pipeline script
-Service hooks for repository created, renamed, and deleted MUST be provisioned by a Python script executed inside an ADO pipeline.
-
-#### Scenario: Initial project setup
-- **WHEN** an operator runs the provisioning pipeline for an ADO project
-- **THEN** the required service hooks are registered to forward events to the ingestion endpoint, which publishes transport messages with `source: "ado"` and raw hook payloads to the Service Bus queue
-
-### Requirement: Audit stream provisioning by PS
-Default-branch audit stream subscription MUST be deployed by Snyk Professional Services (not customer self-service in v1).
+### Requirement: Audit stream provisioning
+Audit stream subscription for ADO Git repository lifecycle events MUST be provisioned per operator documentation (`INGESTION.md`): Event Grid topic, ADO organization audit stream, Event Grid subscription with lifecycle filters, and ingress handler to Service Bus.
 
 #### Scenario: Audit stream setup
-- **WHEN** PS completes audit stream deployment
-- **THEN** default-branch change events flow to Event Grid and onward to the Service Bus queue
+- **WHEN** an operator completes audit stream deployment per INGESTION.md
+- **THEN** Git repository created, renamed, deleted, and default-branch-changed audit events flow to Event Grid and onward to the Service Bus queue
 
 ### Requirement: ADO PAT usage
 ADO PAT MUST be used for metadata enrichment and reconciliation operations requiring ADO REST API access; it MUST be stored in Key Vault or container secrets.
@@ -25,9 +18,16 @@ ADO PAT MUST be used for metadata enrichment and reconciliation operations requi
 - **WHEN** the worker needs ADO metadata not present in the normalized event
 - **THEN** it calls ADO REST API using the configured PAT without logging credentials
 
-### Requirement: Default branch detection mode
-Default branch changes MUST be detected via audit stream only; reconciliation polling is out of scope for v1.
+### Requirement: ADO lifecycle detection mode
+ADO repository lifecycle changes MUST be detected via audit stream only; service hooks and reconciliation polling are out of scope for v1.
 
-#### Scenario: Branch change without audit event
-- **WHEN** default branch changes but no audit event is delivered
-- **THEN** the service does not automatically re-import until an audit event is received
+#### Scenario: Lifecycle change without audit event
+- **WHEN** a repository lifecycle change occurs but no audit event is delivered
+- **THEN** the service does not automatically sync until an audit event is received
+
+### Requirement: Audit stream latency characteristics
+Operators MUST be informed that ADO audit stream events are batched and typically delivered within 30 minutes or less. Documentation MUST state this latency is expected and acceptable for v1.
+
+#### Scenario: Operator expects immediate sync after repo creation
+- **WHEN** an operator creates a repository in ADO
+- **THEN** documentation explains sync may not occur until the next audit batch is delivered to Event Grid

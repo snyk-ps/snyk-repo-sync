@@ -1,6 +1,6 @@
 ## Purpose
 
-Queue-driven worker that normalizes provider events, validates state, routes repo lifecycle events by source, enforces idempotency, and handles retries and dead-lettering. Event normalization is owned by this PS-maintained application so lifecycle mapping ships with worker releases rather than customer-owned ingress infrastructure.
+Queue-driven worker that normalizes provider events, validates state, routes repo lifecycle events by source, enforces idempotency, and handles retries and dead-lettering. Event normalization is owned by the worker application in this repository so lifecycle mapping ships with worker releases rather than customer-owned ingress infrastructure.
 ## Requirements
 ### Requirement: Queue-driven processing
 The worker MUST consume messages from the Service Bus queue on demand; it MUST NOT rely on always-on polling of ADO, GitHub, or Snyk as its primary trigger.
@@ -15,19 +15,27 @@ The worker MUST parse transport messages from ADO and GitHub and produce a norma
 | Field          | ADO                  | GitHub                 |
 | -------------- | -------------------- | ---------------------- |
 | `source`       | `"ado"`              | `"github"`             |
-| `eventId`      | hook or audit id     | GitHub delivery GUID   |
+| `eventId`      | audit record `Id`    | GitHub delivery GUID   |
 | `eventType`    | `repo.created`, etc. | same lifecycle types   |
 | `scopeId`      | ADO project ID       | GitHub org ID          |
 | `repositoryId` | ADO repository ID    | GitHub repo ID (numeric) |
-| `occurredAt`   | event timestamp      | webhook timestamp      |
-| `payload`      | ADO-specific extras  | repo name, default branch, etc. |
+| `occurredAt`   | audit `Timestamp`    | webhook timestamp      |
+| `payload`      | ADO audit extras     | repo name, default branch, etc. |
 
-#### Scenario: ADO service hook normalized to repo created
-- **WHEN** the worker receives a transport message with `source: "ado"` containing a repository-created service hook payload
+#### Scenario: ADO audit stream normalized to repo created
+- **WHEN** the worker receives a transport message with `source: "ado"` containing an audit payload with `ActionId: Git.RepositoryCreated`
 - **THEN** it produces a normalized event with `eventType: repo.created` before further processing
 
+#### Scenario: ADO audit stream normalized to repo renamed
+- **WHEN** the worker receives a transport message with `source: "ado"` containing an audit payload with `ActionId: Git.RepositoryRenamed`
+- **THEN** it produces a normalized event with `eventType: repo.renamed` before further processing
+
+#### Scenario: ADO audit stream normalized to repo deleted
+- **WHEN** the worker receives a transport message with `source: "ado"` containing an audit payload with `ActionId: Git.RepositoryDeleted`
+- **THEN** it produces a normalized event with `eventType: repo.deleted` before further processing
+
 #### Scenario: ADO audit stream normalized to default branch changed
-- **WHEN** the worker receives a transport message with `source: "ado"` containing a default-branch audit payload
+- **WHEN** the worker receives a transport message with `source: "ado"` containing an audit payload with `ActionId: Git.RepositoryDefaultBranchChanged`
 - **THEN** it produces a normalized event with `eventType: repo.default_branch_changed` before further processing
 
 #### Scenario: GitHub webhook normalized to repo renamed

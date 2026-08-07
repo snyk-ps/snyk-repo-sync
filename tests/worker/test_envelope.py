@@ -15,9 +15,12 @@ def test_parse_ado_fixture() -> None:
     body = (FIXTURES / "transport_envelope_ado.json").read_text(encoding="utf-8")
     envelope = parse_transport_envelope(body)
     assert envelope.source == "ado"
-    assert envelope.ingress_id == "ado-hook-repo-created-001"
-    assert envelope.received_at == datetime(2026, 8, 5, 18, 0, tzinfo=timezone.utc)
-    assert envelope.raw_payload["eventType"] == "git.repo.created"
+    assert (
+        envelope.ingress_id
+        == "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca"
+    )
+    assert envelope.received_at == datetime(2026, 8, 6, 17, 21, 57, 799000, tzinfo=timezone.utc)
+    assert envelope.raw_payload["ActionId"] == "Git.RepositoryDefaultBranchChanged"
 
 
 def test_parse_github_fixture() -> None:

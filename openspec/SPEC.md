@@ -4,8 +4,8 @@ Canonical specifications for this project. Each capability has a dedicated spec 
 
 | Capability | Path | Description |
 | --- | --- | --- |
-| ado-provisioning | `openspec/specs/ado-provisioning/spec.md` | Provision ADO service hooks via pipeline script and audit stream via PS deployment. |
-| event-ingestion | `openspec/specs/event-ingestion/spec.md` | Deliver ADO service hook and audit stream events to a single Service Bus queue via customer-owned ingress; raw payloads only, no lifecycle normalization. |
+| ado-provisioning | `openspec/specs/ado-provisioning/spec.md` | Provision ADO audit stream for all Git repository lifecycle events (operator guide in INGESTION.md). |
+| event-ingestion | `openspec/specs/event-ingestion/spec.md` | Deliver ADO audit stream and GitHub webhook events to a single Service Bus queue via customer-owned ingress; raw payloads only, no lifecycle normalization. |
 | github-provisioning | `openspec/specs/github-provisioning/spec.md` | Provision GitHub organization webhooks so repository lifecycle events reach the webhook ingress endpoint. |
 | github-webhook-ingestion | `openspec/specs/github-webhook-ingestion/spec.md` | Receive GitHub organization repository webhooks on customer-owned ingress, validate authenticity, deduplicate deliveries, and publish raw payloads to the Service Bus queue. |
 | ignored-repos | `openspec/specs/ignored-repos/spec.md` | Ignore-list and name-prefix regex policy with scheduled deactivation of matching Snyk targets. |

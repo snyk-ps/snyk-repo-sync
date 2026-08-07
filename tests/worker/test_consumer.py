@@ -16,7 +16,7 @@ class FakeMessage:
 def test_process_message_completes_valid_envelope() -> None:
     body = (
         b'{"source":"ado","ingressId":"id-1","receivedAt":"2026-08-05T18:00:00Z",'
-        b'"rawPayload":{"eventType":"git.repo.created"}}'
+        b'"rawPayload":{"ActionId":"Git.RepositoryCreated","ProjectId":"proj-1"}}'
     )
     message = FakeMessage(body)
     receiver = MagicMock()

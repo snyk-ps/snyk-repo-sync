@@ -1,6 +1,6 @@
 ## Purpose
 
-Receive GitHub organization repository webhooks on customer-owned ingress infrastructure, validate authenticity, deduplicate deliveries, and publish raw payloads to the Service Bus queue. Lifecycle normalization is performed by the PS-maintained worker application.
+Receive GitHub organization repository webhooks on customer-owned ingress infrastructure, validate authenticity, deduplicate deliveries, and publish raw payloads to the Service Bus queue. Lifecycle normalization is performed by the worker application in this repository.
 
 ## Requirements
 

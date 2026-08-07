@@ -1,18 +1,18 @@
 {
   "source": "ado",
-  "ingressId": "ado-hook-repo-created-001",
-  "receivedAt": "2026-08-05T18:00:00Z",
+  "ingressId": "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca",
+  "receivedAt": "2026-08-06T17:21:57.799Z",
   "rawPayload": {
-    "eventType": "git.repo.created",
-    "resource": {
-      "repository": {
-        "id": "repo-guid-001",
-        "name": "sample-repo",
-        "project": {
-          "id": "project-guid-001",
-          "name": "Sample Project"
-        }
-      }
+    "Id": "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca",
+    "ActionId": "Git.RepositoryDefaultBranchChanged",
+    "ProjectId": "da9734d4-a91a-4f03-814b-ecc721fe24d1",
+    "ProjectName": "snykDemoProject",
+    "Timestamp": "2026-08-06T17:21:57.7993795Z",
+    "Data": {
+      "RepoId": "90bd6b5e-0fbd-4edc-a10e-6604fe76027d",
+      "RepoName": "juice-shop.git",
+      "DefaultBranch": "refs/heads/develop",
+      "PreviousDefaultBranch": "refs/heads/master"
     }
   }
 }

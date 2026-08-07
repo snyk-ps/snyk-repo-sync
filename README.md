@@ -2,9 +2,9 @@
 
 Queue-driven worker that consumes repository lifecycle events from Azure Service Bus and syncs Snyk targets for Azure DevOps and GitHub repositories.
 
-External systems (ADO service hooks, GitHub webhooks, Event Grid) publish transport messages to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice validates transport envelopes and completes messages; normalization and Snyk sync follow in a subsequent change.
+External systems (ADO audit stream via Event Grid, GitHub webhooks) publish transport messages to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice validates transport envelopes and completes messages; normalization and Snyk sync follow in a subsequent change.
 
-**Operators:** queue and ingress setup (Service Bus, ADO service hooks, Event Grid audit stream) are documented in **[INGESTION.md](INGESTION.md)**.
+**Operators:** queue and ingress setup (Service Bus, ADO audit stream, GitHub webhooks) are documented in **[INGESTION.md](INGESTION.md)**. ADO audit events are batched and typically arrive within ~30 minutes.
 
 ## Table of contents
 
@@ -132,7 +132,7 @@ The Docker image entrypoint is `python src/main.py worker run`. Sizing, Dockerfi
 
 | Document | Audience |
 | -------- | -------- |
-| **[INGESTION.md](INGESTION.md)** | Service Bus, ADO service hooks, and Event Grid / audit stream setup |
+| **[INGESTION.md](INGESTION.md)** | Service Bus, ADO audit stream, and GitHub webhook ingress setup |
 | **[CONFIGURATION.md](CONFIGURATION.md)** | Environment variables, CLI commands, transport envelope schema |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | Project layout, OpenSpec workflow, tests, CI/Docker |
 | **[openspec/SPEC.md](openspec/SPEC.md)** | Capability specifications |

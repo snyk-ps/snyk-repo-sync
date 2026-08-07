@@ -20,10 +20,11 @@ _None._
 
 ### Modified Capabilities
 
-- `ado-provisioning`: Remove service hook pipeline requirement; audit stream is the sole ADO event source for all Git repo lifecycle events; document accepted batch latency.
+- `ado-provisioning`: Remove service hook pipeline requirement; audit stream is the sole ADO event source; operator-provisioned per INGESTION.md.
 - `event-ingestion`: Remove ADO service hook ingress scenario; all ADO messages are audit records in transport envelopes.
-- `sync-worker`: Remove ADO service hook normalization scenario; normalize all ADO events from audit `ActionId` values.
+- `sync-worker`: Remove ADO service hook normalization scenario; normalize all ADO events from audit `ActionId` values; remove PS ownership wording.
 - `repo-lifecycle`: Explicitly tie ADO create, rename, and delete scenarios to audit stream.
+- `github-webhook-ingestion`: Remove PS ownership wording for normalization ownership.
 
 ## Impact
 

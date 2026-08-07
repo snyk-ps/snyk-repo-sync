@@ -1,20 +1,20 @@
 ## Purpose
 
-Deliver ADO service hook and audit stream events to a single Service Bus queue shared with GitHub webhook ingress. Ingress is customer-owned infrastructure; it validates and forwards provider-native payloads without lifecycle normalization.
+Deliver ADO audit stream and GitHub webhook events to a single Service Bus queue shared with GitHub webhook ingress. Ingress is customer-owned infrastructure; it validates and forwards provider-native payloads without lifecycle normalization.
 ## Requirements
 ### Requirement: Multi-source transport envelope
-All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the PS-maintained worker application.
+All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the worker application in this repository.
 
 | Field         | ADO                              | GitHub                          |
 | ------------- | -------------------------------- | ------------------------------- |
 | `source`      | `"ado"`                          | `"github"`                      |
-| `ingressId`   | service hook or audit event id   | `X-GitHub-Delivery` GUID        |
+| `ingressId`   | audit event `Id`                 | `X-GitHub-Delivery` GUID        |
 | `receivedAt`  | ingress receive timestamp        | ingress receive timestamp       |
-| `rawPayload`  | ADO service hook or audit body   | GitHub webhook JSON body        |
+| `rawPayload`  | ADO audit record body            | GitHub webhook JSON body        |
 
-#### Scenario: ADO service hook repo lifecycle event
-- **WHEN** ADO emits a service hook for repository created, renamed, or deleted
-- **THEN** the ingress path publishes one transport message with `source: "ado"` and the raw hook payload to the Service Bus queue
+#### Scenario: ADO audit stream repo lifecycle event
+- **WHEN** ADO audit stream reports a Git repository created, renamed, deleted, or default-branch-changed event
+- **THEN** the ingress path publishes one transport message with `source: "ado"` and the raw audit record in `rawPayload` to the Service Bus queue
 
 #### Scenario: Audit stream default branch event
 - **WHEN** ADO audit stream reports a repository default branch change

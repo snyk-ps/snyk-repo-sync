@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Multi-source transport envelope
-All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the PS-maintained worker application.
+All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the worker application in this repository.
 
 | Field         | ADO                              | GitHub                          |
 | ------------- | -------------------------------- | ------------------------------- |
