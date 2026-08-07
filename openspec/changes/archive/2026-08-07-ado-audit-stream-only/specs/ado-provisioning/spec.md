@@ -1,13 +1,3 @@
-## REMOVED Requirements
-
-### Requirement: Service hook provisioning via pipeline script
-**Reason:** ADO lifecycle events are ingested exclusively via audit stream.
-**Migration:** Decommission per-project ADO service hook subscriptions; rely on org-level audit stream per INGESTION.md.
-
-### Requirement: Default branch detection mode
-**Reason:** Superseded by audit-only lifecycle detection for all ADO Git repository events.
-**Migration:** Default branch changes continue to use audit stream; no separate detection mode required.
-
 ## MODIFIED Requirements
 
 ### Requirement: Audit stream provisioning

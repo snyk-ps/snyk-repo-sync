@@ -23,7 +23,7 @@ The ingress path MUST deduplicate by GitHub delivery ID (`X-GitHub-Delivery`) be
 - **THEN** only the first accepted delivery is published; subsequent duplicates are acknowledged without re-publishing
 
 ### Requirement: Raw payload publish
-GitHub webhooks MUST be published to the same Service Bus queue using the shared transport envelope with `source: "github"`, `ingressId` set to the delivery GUID, `receivedAt`, and the provider-native webhook body in `rawPayload`.
+GitHub webhooks MUST be published to the same Service Bus queue using the shared transport envelope with `source: "github"`, `ingressId` set to the delivery GUID, `receivedAt`, and the provider-native webhook body in `rawPayload`. Lifecycle normalization MUST be performed by the worker application in this repository, not by customer-owned ingress infrastructure.
 
 #### Scenario: Repository lifecycle webhook accepted
 - **WHEN** GitHub delivers a signed `repository` webhook

@@ -10,7 +10,7 @@ The worker MUST consume messages from the Service Bus queue on demand; it MUST N
 - **THEN** the worker receives and processes it
 
 ### Requirement: Multi-source event normalization
-The worker MUST parse transport messages from ADO and GitHub and produce a normalized internal event model before state access or lifecycle actions. The normalized model MUST include: `source`, `eventId`, `eventType`, `scopeId`, `repositoryId` (when applicable), `occurredAt`, and event-specific `payload` fields required by downstream handlers.
+The worker MUST parse transport messages from ADO and GitHub and produce a normalized internal event model before state access or lifecycle actions. The normalized model MUST include: `source`, `eventId`, `eventType`, `scopeId`, `repositoryId` (when applicable), `occurredAt`, and event-specific `payload` fields required by downstream handlers. Lifecycle normalization MUST be implemented in the worker application in this repository, not in customer-owned ingress infrastructure.
 
 | Field          | ADO                  | GitHub                 |
 | -------------- | -------------------- | ---------------------- |
