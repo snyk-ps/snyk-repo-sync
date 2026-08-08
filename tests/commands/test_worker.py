@@ -1,8 +1,20 @@
 """Tests for worker CLI commands."""
 
+import logging
 from unittest.mock import patch
 
+from commands.worker import configure_logging
 from main import build_parser, main
+
+
+def test_configure_logging_suppresses_noisy_sdk_loggers() -> None:
+    configure_logging()
+
+    assert logging.getLogger().level == logging.INFO
+    assert logging.getLogger("worker.consumer").getEffectiveLevel() == logging.INFO
+    assert logging.getLogger("azure.servicebus").level == logging.WARNING
+    assert logging.getLogger("azure").level == logging.WARNING
+    assert logging.getLogger("uamqp").level == logging.WARNING
 
 
 def test_parser_includes_worker_run() -> None:

@@ -2,12 +2,17 @@
 
 import argparse
 import logging
-import sys
 
 from config.service_bus import ServiceBusConfigError, load_service_bus_settings
 from worker.consumer import WorkerConsumer
 
 logger = logging.getLogger(__name__)
+
+_NOISY_LOGGERS = (
+    "azure",
+    "azure.servicebus",
+    "uamqp",
+)
 
 
 def configure_logging() -> None:
@@ -15,7 +20,10 @@ def configure_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s %(name)s %(message)s",
+        force=True,
     )
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def run_worker(_args: argparse.Namespace) -> int:
@@ -42,6 +50,6 @@ def register_worker_commands(subparsers: argparse._SubParsersAction) -> None:
 
     run_parser = worker_subparsers.add_parser(
         "run",
-        help="Consume transport messages from the Service Bus queue",
+        help="Consume queue messages from the Service Bus queue",
     )
     run_parser.set_defaults(func=run_worker)

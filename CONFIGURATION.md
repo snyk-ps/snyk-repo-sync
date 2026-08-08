@@ -27,24 +27,34 @@ uv run python src/main.py worker run
 
 | Command | Purpose |
 | ------- | ------- |
-| **`worker run`** | Long-running Service Bus consumer; validates transport envelopes, normalizes ADO lifecycle events, and completes messages (slice 2; Snyk sync deferred) |
+| **`worker run`** | Long-running Service Bus consumer; parses native queue messages, normalizes ADO lifecycle events, and completes messages (slice 2; Snyk sync deferred) |
 
-## Transport envelope
+## Queue message shapes
 
-Queue message bodies MUST be JSON objects with:
+Queue message bodies are provider-native JSON — not wrapped in a transport envelope.
 
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| `source` | `"ado"` or `"github"` | Event origin |
-| `ingressId` | string | Provider event or delivery identifier |
-| `receivedAt` | ISO-8601 UTC | When the external ingress path accepted the event |
-| `rawPayload` | object | Provider-native event body |
+### ADO (Event Grid schema)
+
+Event Grid JSON with audit record under `data`. The worker detects ADO when `eventType == "AzureDevOpsAuditEvent"` **or** `subject == "AzureDevOps/Auditing"`.
+
+| Field | Description |
+| ----- | ----------- |
+| `eventType` / `subject` | ADO message detection |
+| `data` | Audit record passed to normalization |
+| `data.Id` | Event id |
+| `data.ActionId` | Lifecycle action (`Git.RepositoryCreated`, etc.) |
+
+See `data/fixtures/eventgrid_ado_*.json` and **[INGESTION.md](INGESTION.md)**.
+
+### GitHub (raw webhook JSON)
+
+Top-level webhook body with `action` and `repository`. See `data/fixtures/github_webhook_created.json`.
 
 See `openspec/specs/event-ingestion/spec.md` for the canonical contract. Step-by-step ingress setup (Service Bus, ADO audit stream, GitHub webhooks): **[INGESTION.md](INGESTION.md)**.
 
 ## Normalized lifecycle event (ADO)
 
-After envelope validation, the worker maps supported ADO audit records into a normalized lifecycle event before completing the message. GitHub envelopes are completed without normalization until a follow-up change.
+After parsing, the worker maps supported ADO audit records into a normalized lifecycle event before completing the message. GitHub messages are completed without normalization until a follow-up change.
 
 | Field | ADO audit source | Description |
 | ----- | ---------------- | ----------- |
@@ -59,18 +69,19 @@ After envelope validation, the worker maps supported ADO audit records into a no
 | `ado.projectName` | `ProjectName` | Project name |
 | `repository.name` | `Data.RepoName` | Repository name |
 | `payload.defaultBranch` | `Data.DefaultBranch` | Optional on create; required on default-branch change (`refs/heads/` stripped) |
-| `payload.previousDefaultBranch` | `Data.PreviousDefaultBranch` | Required on default-branch change |
+| `payload.previousDefaultBranch` | `Data.PreviousDefaultBranch` | Present when ADO reports a prior default branch; omitted when empty (no sync action) |
 | `payload.previousRepoName` | `Data.PreviousRepoName` | Required on rename |
 
 Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryRenamed`, `Git.RepositoryDeleted`, `Git.RepositoryDefaultBranchChanged`.
 
 ## Error handling and logging
 
-- Malformed transport envelopes are **dead-lettered** with reason `InvalidEnvelope`.
+- Unparseable or unrecognized queue messages are **dead-lettered** with reason `InvalidMessage`.
 - ADO audit records that are unsupported or missing required fields are **dead-lettered** with reason `InvalidNormalization`.
-- Valid ADO envelopes are **normalized and completed** without sync state access or Snyk side effects in the current slice.
-- Valid GitHub envelopes are **completed** without normalization or sync side effects until GitHub normalization is implemented.
-- Logs include `source`, `ingress_id`, normalized lifecycle fields for ADO, and queue name — never connection strings or other secrets.
+- Valid ADO messages are **normalized and completed** without sync state access or Snyk side effects in the current slice.
+- Valid GitHub messages are **completed** without normalization or sync side effects until GitHub normalization is implemented.
+- Logs include parsed source, normalized lifecycle fields for ADO, and queue name — never connection strings or other secrets.
+- Azure Service Bus SDK connection/link chatter is logged at **WARNING** and above only; application loggers remain at **INFO**.
 
 ## Integration tests
 

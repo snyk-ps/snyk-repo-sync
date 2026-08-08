@@ -2,7 +2,7 @@
 
 Operator guide for provisioning **customer-owned queue infrastructure** and **event ingress** that delivers repository lifecycle events to the shared Service Bus queue. The worker in this repository only **consumes** that queue; it does not create Service Bus resources or Event Grid topics.
 
-For worker configuration (`SERVICEBUS_CONNECTION_STRING`, transport envelope schema), see **[CONFIGURATION.md](CONFIGURATION.md)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
+For worker configuration (`SERVICEBUS_CONNECTION_STRING`, queue message shapes), see **[CONFIGURATION.md](CONFIGURATION.md)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
 
 ## Architecture
 
@@ -14,24 +14,24 @@ flowchart LR
     AS[Audit stream<br/>Git repo lifecycle]
   end
 
+  subgraph ingress [Azure Event Grid]
+    EG[Custom topic]
+    SUB[Subscription<br/>subject + ActionId filters]
+  end
+
   subgraph gh [GitHub org]
     GHW[Org webhooks]
   end
 
-  subgraph ingress [Customer-owned ingress]
-    GWR[GitHub webhook receiver]
-    FN[Event Grid handler]
-  end
-
-  EG[Event Grid topic]
+  GWR[GitHub webhook receiver]
   SB[(Service Bus queue)]
   W[Worker Container App]
 
   AS --> EG
-  EG --> FN
+  EG --> SUB
+  SUB -->|Event Grid JSON| SB
   GHW --> GWR
-  FN -->|transport envelope| SB
-  GWR -->|transport envelope| SB
+  GWR -->|webhook JSON| SB
   SB --> W
 ```
 
@@ -39,10 +39,10 @@ flowchart LR
 
 | ADO lifecycle event | Audit `ActionId` | Path | Scope |
 | ------------------- | ---------------- | ---- | ----- |
-| Repository created | `Git.RepositoryCreated` | Audit stream → Event Grid → ingress → Service Bus | Organization |
-| Repository renamed | `Git.RepositoryRenamed` | Audit stream → Event Grid → ingress → Service Bus | Organization |
-| Repository deleted | `Git.RepositoryDeleted` | Audit stream → Event Grid → ingress → Service Bus | Organization |
-| Default branch changed | `Git.RepositoryDefaultBranchChanged` | Audit stream → Event Grid → ingress → Service Bus | Organization |
+| Repository created | `Git.RepositoryCreated` | Audit stream → Event Grid → Service Bus | Organization |
+| Repository renamed | `Git.RepositoryRenamed` | Audit stream → Event Grid → Service Bus | Organization |
+| Repository deleted | `Git.RepositoryDeleted` | Audit stream → Event Grid → Service Bus | Organization |
+| Default branch changed | `Git.RepositoryDefaultBranchChanged` | Audit stream → Event Grid → Service Bus | Organization |
 
 All ADO Git repository lifecycle events use the **audit stream** exclusively. GitHub default branch changes use organization webhooks (see `openspec/specs/github-webhook-ingestion/spec.md`).
 
@@ -63,7 +63,6 @@ Provision queue infrastructure **outside this repository** before deploying the 
    - **Lock duration**: default (`60` seconds) unless messages require longer processing.
    - **Dead-lettering on message expiration**: enabled.
 4. Under **Shared access policies**, create or use policies with least privilege:
-   - **Audit-stream ingress handler**: `Send` only.
    - **GitHub webhook ingress**: `Send` only.
    - **Worker**: `Listen` (and `Manage` if the worker dead-letters messages).
 
@@ -109,46 +108,50 @@ Store secrets in Key Vault or your Container App secret store. **Never** commit 
 | Consumer | Variables / secrets |
 | -------- | ------------------- |
 | Worker | `SERVICEBUS_CONNECTION_STRING`, `SERVICEBUS_QUEUE_NAME` |
-| Audit-stream ingress handler | Send-capable connection string and queue name |
 | GitHub webhook ingress | Send-capable connection string and queue name |
 
 ---
 
-## 2. Transport envelope
+## 2. Queue message shapes
 
-All queue messages MUST use the shared transport envelope. Ingress wraps provider-native payloads; the worker unwraps and normalizes them.
+The worker consumes **provider-native JSON** from Service Bus. There is no transport envelope wrapper.
 
-| Field | Type | Description |
-| ----- | ---- | ----------- |
-| `source` | `"ado"` or `"github"` | Event origin |
-| `ingressId` | string | Audit record `Id` (ADO) or GitHub delivery GUID |
-| `receivedAt` | ISO-8601 UTC | When ingress accepted the event |
-| `rawPayload` | object | Audit record (ADO) or GitHub webhook body |
+### ADO (Event Grid schema)
 
-**ADO audit stream example** (see `data/fixtures/transport_envelope_ado.json`):
+Event Grid delivers audit events directly to the Service Bus queue. The message body is Event Grid JSON; the audit record is nested under `data`.
+
+| Field | Use |
+| ----- | --- |
+| `eventType` | ADO detection (`AzureDevOpsAuditEvent`) |
+| `subject` | ADO detection (`AzureDevOps/Auditing`) |
+| `data` | Audit record passed to normalization |
+| `data.Id` | Event id |
+| `data.ActionId` | Lifecycle action |
+| `data.ScopeId`, `data.ProjectId`, `data.Data.*` | Normalized org/project/repo/branch |
+
+**Example** (see `data/fixtures/eventgrid_ado_default_branch_changed.json`):
 
 ```json
 {
-  "source": "ado",
-  "ingressId": "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca",
-  "receivedAt": "2026-08-06T17:21:57.799Z",
-  "rawPayload": {
-    "Id": "2516162638822006204;00000064-0000-8888-8000-000000000000;c8cf06d1-d056-4643-807e-38720b986dca",
+  "subject": "AzureDevOps/Auditing",
+  "eventType": "AzureDevOpsAuditEvent",
+  "data": {
+    "Id": "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f",
     "ActionId": "Git.RepositoryDefaultBranchChanged",
+    "ScopeId": "c638432a-7f35-450f-984f-372b9d46a376",
+    "ScopeDisplayName": "torstencannell (Organization)",
     "ProjectId": "da9734d4-a91a-4f03-814b-ecc721fe24d1",
     "ProjectName": "snykDemoProject",
-    "Timestamp": "2026-08-06T17:21:57.7993795Z",
+    "Timestamp": "2026-08-06T17:31:52.3273845Z",
     "Data": {
       "RepoId": "90bd6b5e-0fbd-4edc-a10e-6604fe76027d",
       "RepoName": "juice-shop.git",
-      "DefaultBranch": "refs/heads/develop",
-      "PreviousDefaultBranch": "refs/heads/master"
+      "DefaultBranch": "refs/heads/master",
+      "PreviousDefaultBranch": "refs/heads/develop"
     }
   }
 }
 ```
-
-Use the audit record **`Id`** field as `ingressId`. Put the audit fields (not the Event Grid wrapper) in `rawPayload`.
 
 Supported ADO audit `ActionId` values:
 
@@ -158,6 +161,10 @@ Supported ADO audit `ActionId` values:
 | Repository renamed | `Git.RepositoryRenamed` |
 | Repository deleted | `Git.RepositoryDeleted` |
 | Default branch changed | `Git.RepositoryDefaultBranchChanged` |
+
+### GitHub (raw webhook JSON)
+
+GitHub webhook ingress publishes the signed webhook body directly to the queue (see `data/fixtures/github_webhook_created.json`). The worker detects GitHub by top-level `repository` and `action` fields. Normalization is deferred in the current slice.
 
 ---
 
@@ -203,15 +210,21 @@ Microsoft reference: [Create audit streaming for Azure DevOps](https://learn.mic
 
 ### Step 3: Event Grid subscription with filter
 
-Create a subscription on the topic that forwards **Git repository lifecycle events**.
+Create a subscription on the topic that forwards **Git repository lifecycle events** directly to the Service Bus queue.
 
 | Setting | Value |
 | ------- | ----- |
 | Event schema | Event Grid Schema |
+| Endpoint type | Service Bus queue |
 | Filter type | Advanced filters |
-| Key | `data.ActionId` |
-| Operator | String in |
-| Values | `Git.RepositoryCreated`, `Git.RepositoryRenamed`, `Git.RepositoryDeleted`, `Git.RepositoryDefaultBranchChanged` |
+| Filter 1 key | `subject` |
+| Filter 1 operator | String in |
+| Filter 1 values | `AzureDevOps/Auditing` |
+| Filter 2 key | `data.ActionId` |
+| Filter 2 operator | String in |
+| Filter 2 values | `Git.RepositoryCreated`, `Git.RepositoryRenamed`, `Git.RepositoryDeleted`, `Git.RepositoryDefaultBranchChanged` |
+
+Do **not** set `includedEventTypes`; advanced filters alone limit delivery.
 
 Optional additional filter for a single ADO project:
 
@@ -228,31 +241,21 @@ TOPIC_ID=$(az eventgrid topic show \
   --query id -o tsv)
 
 az eventgrid event-subscription create \
-  --name ado-lifecycle-to-function \
+  --name ado-lifecycle-to-servicebus \
   --source-resource-id "$TOPIC_ID" \
-  --endpoint-type azurefunction \
-  --endpoint "/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Web/sites/{app}/functions/{name}" \
-  --advanced-filter data.ActionId StringIn Git.RepositoryCreated Git.RepositoryRenamed Git.RepositoryDeleted Git.RepositoryDefaultBranchChanged
+  --endpoint-type servicebusqueue \
+  --endpoint "/subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.ServiceBus/namespaces/{ns}/queues/{queue}" \
+  --advanced-filter subject StringIn AzureDevOps/Auditing \
+  --advanced-filter data.ActionId StringIn \
+    Git.RepositoryCreated \
+    Git.RepositoryRenamed \
+    Git.RepositoryDeleted \
+    Git.RepositoryDefaultBranchChanged
 ```
 
-Replace the endpoint with your Azure Function, webhook, or Logic App URL.
+Replace the endpoint with your Service Bus namespace and queue resource ID.
 
-### Step 4: Forward to Service Bus (ingress handler)
-
-Event Grid delivers messages in **Event Grid schema** (`eventType: AzureDevOpsAuditEvent`, audit fields nested under `data`). A direct Event Grid → Service Bus subscription does **not** produce transport envelopes.
-
-Use an ingress component (recommended: **Azure Function** with Event Grid trigger) that:
-
-1. Receives the Event Grid event.
-2. Confirms `data.ActionId` is one of the four supported Git repository lifecycle values (defense in depth if the subscription filter is misconfigured).
-3. Builds the transport envelope:
-   - `source`: `"ado"`
-   - `ingressId`: audit record `data.Id`
-   - `receivedAt`: current UTC timestamp
-   - `rawPayload`: the audit record object from `data` (same shape as the ADO audit log export)
-4. Sends the envelope JSON to the Service Bus queue.
-
-**Audit fields used downstream**
+### Step 4: Audit fields used downstream
 
 | Field | Use |
 | ----- | --- |
@@ -275,7 +278,7 @@ See **[CONFIGURATION.md](CONFIGURATION.md)** for the full normalized lifecycle e
 2. Confirm the event appears in **Organization settings → Auditing** with the expected `ActionId`.
 3. Within ~30 minutes, check Event Grid topic **Metrics → Publish Success Count**.
 4. Confirm your subscription endpoint receives the filtered event.
-5. Confirm a transport envelope message appears on the Service Bus queue.
+5. Confirm an Event Grid JSON message appears on the Service Bus queue.
 6. Confirm the worker logs receipt (or run integration tests — see **[CONFIGURATION.md § Integration tests](CONFIGURATION.md#integration-tests)**).
 
 ---
@@ -289,8 +292,8 @@ See **[CONFIGURATION.md](CONFIGURATION.md)** for the full normalized lifecycle e
 | Audit stream disabled | Auditing policy off; stream access key rotated without updating ADO |
 | No Event Grid publishes | Stream not enabled; wrong Event Grid schema (must be Event Grid Schema) |
 | Subscription never delivers | Advanced filter key wrong — use `data.ActionId`, not `ActionId` |
-| Lifecycle change in audit log but never on queue | Event Grid subscription missing; ingress handler not republishing |
-| Worker dead-letters with `InvalidEnvelope` | Queue message missing `source`, `ingressId`, `receivedAt`, or `rawPayload` |
+| Lifecycle change in audit log but never on queue | Event Grid subscription missing or filters misconfigured |
+| Worker dead-letters with `InvalidMessage` | Queue message is not valid Event Grid JSON (ADO) or GitHub webhook JSON |
 | Worker dead-letters with `InvalidNormalization` | ADO audit record unsupported or missing required org/project/repo/branch fields |
 
 ---
@@ -299,8 +302,8 @@ See **[CONFIGURATION.md](CONFIGURATION.md)** for the full normalized lifecycle e
 
 | Document | Content |
 | -------- | ------- |
-| **[CONFIGURATION.md](CONFIGURATION.md)** | Worker env vars, CLI, envelope validation |
+| **[CONFIGURATION.md](CONFIGURATION.md)** | Worker env vars, CLI, queue message shapes |
 | **[README.md](README.md)** | Worker install, run, deploy |
 | **`openspec/specs/event-ingestion/spec.md`** | Canonical ingress contract |
 | **`openspec/specs/ado-provisioning/spec.md`** | ADO audit stream provisioning requirements |
-| **`data/fixtures/transport_envelope_ado.json`** | Sample ADO audit transport envelope |
+| **`data/fixtures/eventgrid_ado_default_branch_changed.json`** | Sample ADO Event Grid queue message |

@@ -1,10 +1,8 @@
-"""Normalize transport envelopes into provider-neutral lifecycle events."""
+"""Normalize provider payloads into provider-neutral lifecycle events."""
 
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
-
-from worker.envelope import TransportEnvelope
 
 INVALID_NORMALIZATION_REASON = "InvalidNormalization"
 
@@ -26,7 +24,7 @@ BRANCH_REF_PREFIX = "refs/heads/"
 
 
 class NormalizationError(ValueError):
-    """Raised when a transport envelope cannot be normalized."""
+    """Raised when an audit record cannot be normalized."""
 
 
 @dataclass(frozen=True)
@@ -86,18 +84,18 @@ def _require_non_empty_str(data: dict[str, Any], key: str, *, context: str) -> s
     return value.strip()
 
 
-def _require_audit_data(raw_payload: dict[str, Any]) -> dict[str, Any]:
-    data = raw_payload.get("Data")
+def _require_audit_data(audit_record: dict[str, Any]) -> dict[str, Any]:
+    data = audit_record.get("Data")
     if not isinstance(data, dict):
         raise NormalizationError("audit Data must be a JSON object")
     return data
 
 
-def normalize_ado_lifecycle_event(envelope: TransportEnvelope) -> NormalizedEvent:
-    """Map an ADO audit transport envelope to a normalized lifecycle event.
+def normalize_ado_audit_record(audit_record: dict[str, Any]) -> NormalizedEvent:
+    """Map an ADO audit record to a normalized lifecycle event.
 
     Args:
-        envelope: Validated transport envelope with ``source: "ado"``.
+        audit_record: Audit object from Event Grid ``data``.
 
     Returns:
         Normalized lifecycle event.
@@ -105,10 +103,7 @@ def normalize_ado_lifecycle_event(envelope: TransportEnvelope) -> NormalizedEven
     Raises:
         NormalizationError: If the audit record is unsupported or incomplete.
     """
-    if envelope.source != "ado":
-        raise NormalizationError('normalization requires source "ado"')
-
-    raw = envelope.raw_payload
+    raw = audit_record
     action_id = _require_non_empty_str(raw, "ActionId", context="audit record")
     event_type = ADO_ACTION_TO_EVENT_TYPE.get(action_id)
     if event_type is None:
@@ -141,11 +136,11 @@ def normalize_ado_lifecycle_event(envelope: TransportEnvelope) -> NormalizedEven
         payload["defaultBranch"] = strip_branch_ref(
             _require_non_empty_str(data, "DefaultBranch", context="audit Data")
         )
-        payload["previousDefaultBranch"] = strip_branch_ref(
-            _require_non_empty_str(
-                data, "PreviousDefaultBranch", context="audit Data"
+        previous_default_branch = data.get("PreviousDefaultBranch")
+        if isinstance(previous_default_branch, str) and previous_default_branch.strip():
+            payload["previousDefaultBranch"] = strip_branch_ref(
+                previous_default_branch.strip()
             )
-        )
 
     return NormalizedEvent(
         source="ado",

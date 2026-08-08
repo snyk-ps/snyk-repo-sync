@@ -1,0 +1,13 @@
+{
+  "action": "created",
+  "repository": {
+    "id": 123456789,
+    "name": "sample-repo",
+    "full_name": "sample-org/sample-repo",
+    "default_branch": "main"
+  },
+  "organization": {
+    "id": 987654321,
+    "login": "sample-org"
+  }
+}

@@ -6,15 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from worker.envelope import parse_transport_envelope
-from worker.normalize import NormalizationError, normalize_ado_lifecycle_event, strip_branch_ref
+from worker.message import parse_queue_message
+from worker.normalize import NormalizationError, normalize_ado_audit_record, strip_branch_ref
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "fixtures"
 
 
-def _envelope_from_fixture(name: str):
+def _audit_from_fixture(name: str) -> dict:
     body = (FIXTURES / name).read_text(encoding="utf-8")
-    return parse_transport_envelope(body)
+    message = parse_queue_message(body)
+    assert message.source == "ado"
+    return message.provider_payload
 
 
 def test_strip_branch_ref() -> None:
@@ -23,8 +25,8 @@ def test_strip_branch_ref() -> None:
 
 
 def test_normalize_default_branch_changed_fixture() -> None:
-    envelope = _envelope_from_fixture("transport_envelope_ado.json")
-    event = normalize_ado_lifecycle_event(envelope)
+    audit = _audit_from_fixture("eventgrid_ado_default_branch_changed.json")
+    event = normalize_ado_audit_record(audit)
 
     assert event.event_type == "repo.default_branch_changed"
     assert event.event_id == "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f"
@@ -45,80 +47,78 @@ def test_normalize_default_branch_changed_fixture() -> None:
 
 
 def test_normalize_created_fixture() -> None:
-    envelope = _envelope_from_fixture("transport_envelope_ado_created.json")
-    event = normalize_ado_lifecycle_event(envelope)
+    audit = _audit_from_fixture("eventgrid_ado_created.json")
+    event = normalize_ado_audit_record(audit)
 
     assert event.event_type == "repo.created"
     assert event.payload == {"defaultBranch": "main"}
 
 
 def test_normalize_renamed_fixture() -> None:
-    envelope = _envelope_from_fixture("transport_envelope_ado_renamed.json")
-    event = normalize_ado_lifecycle_event(envelope)
+    audit = _audit_from_fixture("eventgrid_ado_renamed.json")
+    event = normalize_ado_audit_record(audit)
 
     assert event.event_type == "repo.renamed"
     assert event.payload == {"previousRepoName": "old-repo.git"}
 
 
 def test_normalize_deleted_fixture() -> None:
-    envelope = _envelope_from_fixture("transport_envelope_ado_deleted.json")
-    event = normalize_ado_lifecycle_event(envelope)
+    audit = _audit_from_fixture("eventgrid_ado_deleted.json")
+    event = normalize_ado_audit_record(audit)
 
     assert event.event_type == "repo.deleted"
     assert event.payload == {}
 
 
+def test_normalize_default_branch_changed_without_previous_branch() -> None:
+    audit = {
+        "Id": "911fef54-3e24-4c7a-bdf0-84679380b4c7",
+        "ActionId": "Git.RepositoryDefaultBranchChanged",
+        "ScopeId": "c638432a-7f35-450f-984f-372b9d46a376",
+        "ScopeDisplayName": "torstencannell (Organization)",
+        "ProjectId": "da9734d4-a91a-4f03-814b-ecc721fe24d1",
+        "ProjectName": "snykDemoProject",
+        "Timestamp": "2026-08-07T17:50:45.8246565Z",
+        "Data": {
+            "RepoId": "28b62628-73ec-4f6b-89cb-d5a023e9be23",
+            "RepoName": "test-repo",
+            "DefaultBranch": "refs/heads/main",
+            "PreviousDefaultBranch": "",
+        },
+    }
+
+    event = normalize_ado_audit_record(audit)
+
+    assert event.event_type == "repo.default_branch_changed"
+    assert event.payload == {"defaultBranch": "main"}
+
+
 def test_normalize_unsupported_action_id() -> None:
-    envelope = parse_transport_envelope(
-        json.dumps(
-            {
-                "source": "ado",
-                "ingressId": "x",
-                "receivedAt": "2026-08-05T18:00:00Z",
-                "rawPayload": {
-                    "Id": "x",
-                    "ActionId": "Git.RepositoryForked",
-                    "ScopeId": "org",
-                    "ScopeDisplayName": "org (Organization)",
-                    "ProjectId": "proj",
-                    "ProjectName": "proj-name",
-                    "Timestamp": "2026-08-05T18:00:00Z",
-                    "Data": {"RepoId": "repo", "RepoName": "r.git"},
-                },
-            }
-        )
-    )
+    audit = {
+        "Id": "x",
+        "ActionId": "Git.RepositoryForked",
+        "ScopeId": "org",
+        "ScopeDisplayName": "org (Organization)",
+        "ProjectId": "proj",
+        "ProjectName": "proj-name",
+        "Timestamp": "2026-08-05T18:00:00Z",
+        "Data": {"RepoId": "repo", "RepoName": "r.git"},
+    }
 
     with pytest.raises(NormalizationError, match="unsupported audit ActionId"):
-        normalize_ado_lifecycle_event(envelope)
+        normalize_ado_audit_record(audit)
 
 
 def test_normalize_missing_scope_id() -> None:
-    envelope = parse_transport_envelope(
-        json.dumps(
-            {
-                "source": "ado",
-                "ingressId": "x",
-                "receivedAt": "2026-08-05T18:00:00Z",
-                "rawPayload": {
-                    "Id": "x",
-                    "ActionId": "Git.RepositoryDeleted",
-                    "ScopeDisplayName": "org (Organization)",
-                    "ProjectId": "proj",
-                    "ProjectName": "proj-name",
-                    "Timestamp": "2026-08-05T18:00:00Z",
-                    "Data": {"RepoId": "repo", "RepoName": "r.git"},
-                },
-            }
-        )
-    )
+    audit = {
+        "Id": "x",
+        "ActionId": "Git.RepositoryDeleted",
+        "ScopeDisplayName": "org (Organization)",
+        "ProjectId": "proj",
+        "ProjectName": "proj-name",
+        "Timestamp": "2026-08-05T18:00:00Z",
+        "Data": {"RepoId": "repo", "RepoName": "r.git"},
+    }
 
     with pytest.raises(NormalizationError, match="ScopeId"):
-        normalize_ado_lifecycle_event(envelope)
-
-
-def test_normalize_requires_ado_source() -> None:
-    envelope = _envelope_from_fixture("transport_envelope_github.json")
-
-    with pytest.raises(NormalizationError, match='source "ado"'):
-        normalize_ado_lifecycle_event(envelope)
+        normalize_ado_audit_record(audit)

@@ -1,69 +1,74 @@
-"""Slice-2 message handling: validate envelope, normalize ADO events, complete."""
+"""Slice-2 message handling: parse native queue messages, normalize ADO events."""
 
 import logging
 from dataclasses import dataclass
 
-from worker.envelope import EnvelopeValidationError, TransportEnvelope, parse_transport_envelope
-from worker.normalize import NormalizationError, NormalizedEvent, normalize_ado_lifecycle_event
+from worker.message import MessageParseError, QueueMessage, parse_queue_message
+from worker.normalize import NormalizationError, NormalizedEvent, normalize_ado_audit_record
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class HandleResult:
-    """Outcome of transport message handling before queue settlement."""
+    """Outcome of queue message handling before settlement."""
 
-    envelope: TransportEnvelope
+    message: QueueMessage
     normalized: NormalizedEvent | None = None
 
 
-def handle_transport_message(body: str | bytes) -> HandleResult:
-    """Validate a transport envelope and normalize supported ADO lifecycle events.
+def handle_queue_message(body: str | bytes) -> HandleResult:
+    """Parse a native queue message and normalize supported ADO lifecycle events.
 
-    GitHub envelopes are validated and passed through without normalization.
+    GitHub messages are parsed and passed through without normalization.
     Sync actions are intentionally omitted in this slice.
 
     Args:
         body: Raw queue message body.
 
     Returns:
-        Parsed envelope and optional normalized event.
+        Parsed message and optional normalized event.
 
     Raises:
-        EnvelopeValidationError: If the envelope is malformed.
+        MessageParseError: If the message is malformed or unrecognized.
         NormalizationError: If ADO normalization fails.
     """
-    envelope = parse_transport_envelope(body)
+    message = parse_queue_message(body)
     logger.info(
-        "Validated transport envelope",
-        extra={
-            "source": envelope.source,
-            "ingress_id": envelope.ingress_id,
-            "received_at": envelope.received_at.isoformat(),
-        },
+        "Parsed queue message source=%s event_id=%s",
+        message.source,
+        message.event_id,
     )
 
-    if envelope.source == "github":
+    if message.source == "github":
+        logger.info("GitHub normalization deferred; completing without lifecycle processing")
+        return HandleResult(message=message)
+
+    normalized = normalize_ado_audit_record(message.provider_payload)
+    if (
+        normalized.event_type == "repo.default_branch_changed"
+        and "previousDefaultBranch" not in normalized.payload
+    ):
         logger.info(
-            "GitHub normalization deferred; completing without lifecycle processing",
-            extra={"ingress_id": envelope.ingress_id},
+            "Default branch set with no previous default branch; no sync action needed "
+            "event_id=%s scope_id=%s repository_id=%s repository_name=%s default_branch=%s",
+            normalized.event_id,
+            normalized.scope_id,
+            normalized.repository_id,
+            normalized.repository.name,
+            normalized.payload.get("defaultBranch"),
         )
-        return HandleResult(envelope=envelope)
-
-    normalized = normalize_ado_lifecycle_event(envelope)
-    logger.info(
-        "Normalized ADO lifecycle event",
-        extra={
-            "event_type": normalized.event_type,
-            "event_id": normalized.event_id,
-            "scope_id": normalized.scope_id,
-            "repository_id": normalized.repository_id,
-            "ado_org_id": normalized.ado.org_id,
-            "ado_org_display_name": normalized.ado.org_display_name,
-            "ado_project_id": normalized.ado.project_id,
-            "ado_project_name": normalized.ado.project_name,
-            "repository_name": normalized.repository.name,
-            "payload": normalized.payload,
-        },
-    )
-    return HandleResult(envelope=envelope, normalized=normalized)
+    else:
+        logger.info(
+            "Normalized ADO lifecycle event event_type=%s event_id=%s scope_id=%s "
+            "repository_id=%s ado_org_id=%s ado_project_name=%s repository_name=%s payload=%s",
+            normalized.event_type,
+            normalized.event_id,
+            normalized.scope_id,
+            normalized.repository_id,
+            normalized.ado.org_id,
+            normalized.ado.project_name,
+            normalized.repository.name,
+            normalized.payload,
+        )
+    return HandleResult(message=message, normalized=normalized)

@@ -6,8 +6,8 @@ from typing import Protocol
 from azure.servicebus import ServiceBusClient, ServiceBusReceivedMessage
 
 from config.service_bus import ServiceBusSettings
-from worker.envelope import EnvelopeValidationError
-from worker.handler import handle_transport_message
+from worker.handler import handle_queue_message
+from worker.message import INVALID_MESSAGE_REASON, MessageParseError
 from worker.normalize import INVALID_NORMALIZATION_REASON, NormalizationError
 
 logger = logging.getLogger(__name__)
@@ -35,13 +35,20 @@ def _message_body(message: ServiceBusReceivedMessage) -> bytes:
     body = message.body
     if isinstance(body, bytes):
         return body
+    if isinstance(body, bytearray):
+        return bytes(body)
+    if isinstance(body, memoryview):
+        return body.tobytes()
+    if isinstance(body, str):
+        return body.encode("utf-8")
     if isinstance(body, (list, tuple)):
-        return b"".join(part if isinstance(part, bytes) else part.encode("utf-8") for part in body)
-    return str(body).encode("utf-8")
-
+        return b"".join(
+            part if isinstance(part, bytes) else part.encode("utf-8") for part in body
+        )
+    return b"".join(body)
 
 def process_message(message: ServiceBusReceivedMessage, receiver: QueueReceiver) -> None:
-    """Process one queue message: validate envelope, complete or dead-letter.
+    """Process one queue message: parse, complete, or dead-letter.
 
     Args:
         message: Received Service Bus message.
@@ -49,23 +56,17 @@ def process_message(message: ServiceBusReceivedMessage, receiver: QueueReceiver)
     """
     body = _message_body(message)
     try:
-        handle_transport_message(body)
-    except EnvelopeValidationError as exc:
-        logger.warning(
-            "Dead-lettering message with invalid transport envelope",
-            extra={"reason": str(exc)},
-        )
+        handle_queue_message(body)
+    except MessageParseError as exc:
+        logger.warning("Dead-lettering message with invalid queue message: %s", exc)
         receiver.dead_letter_message(
             message,
-            reason="InvalidEnvelope",
+            reason=INVALID_MESSAGE_REASON,
             error_description=str(exc),
         )
         return
     except NormalizationError as exc:
-        logger.warning(
-            "Dead-lettering message with invalid normalization",
-            extra={"reason": str(exc)},
-        )
+        logger.warning("Dead-lettering message with invalid normalization: %s", exc)
         receiver.dead_letter_message(
             message,
             reason=INVALID_NORMALIZATION_REASON,
@@ -74,11 +75,11 @@ def process_message(message: ServiceBusReceivedMessage, receiver: QueueReceiver)
         return
 
     receiver.complete_message(message)
-    logger.info("Completed transport message", extra={"message_id": message.message_id})
+    logger.info("Completed queue message message_id=%s", message.message_id)
 
 
 class WorkerConsumer:
-    """Long-running worker that consumes transport messages from Service Bus."""
+    """Long-running worker that consumes queue messages from Service Bus."""
 
     def __init__(
         self,
@@ -94,8 +95,8 @@ class WorkerConsumer:
     def run(self) -> None:
         """Receive and process messages until interrupted."""
         logger.info(
-            "Starting worker consumer",
-            extra={"queue_name": self._settings.queue_name},
+            "Starting worker consumer queue_name=%s",
+            self._settings.queue_name,
         )
         with self._client_factory.from_connection_string(
             self._settings.connection_string

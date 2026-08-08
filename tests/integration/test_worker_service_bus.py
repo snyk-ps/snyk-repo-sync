@@ -22,7 +22,7 @@ def _service_bus_configured() -> bool:
 @pytest.mark.skipif(not _service_bus_configured(), reason="Service Bus env not configured")
 def test_worker_completes_published_ado_fixture() -> None:
     settings = load_service_bus_settings()
-    body = (FIXTURES / "transport_envelope_ado.json").read_text(encoding="utf-8")
+    body = (FIXTURES / "eventgrid_ado_default_branch_changed.json").read_text(encoding="utf-8")
 
     with ServiceBusClient.from_connection_string(settings.connection_string) as client:
         sender = client.get_queue_sender(settings.queue_name)
@@ -44,7 +44,7 @@ def test_worker_completes_published_ado_fixture() -> None:
 @pytest.mark.skipif(not _service_bus_configured(), reason="Service Bus env not configured")
 def test_worker_completes_published_github_fixture() -> None:
     settings = load_service_bus_settings()
-    body = (FIXTURES / "transport_envelope_github.json").read_text(encoding="utf-8")
+    body = (FIXTURES / "github_webhook_created.json").read_text(encoding="utf-8")
 
     with ServiceBusClient.from_connection_string(settings.connection_string) as client:
         sender = client.get_queue_sender(settings.queue_name)
@@ -55,12 +55,12 @@ def test_worker_completes_published_github_fixture() -> None:
         with receiver:
             messages = receiver.receive_messages(max_message_count=1, max_wait_time=10)
             assert len(messages) == 1
-            envelope_body = messages[0].body
-            if isinstance(envelope_body, bytes):
-                parsed = json.loads(envelope_body.decode("utf-8"))
+            message_body = messages[0].body
+            if isinstance(message_body, bytes):
+                parsed = json.loads(message_body.decode("utf-8"))
             else:
-                parsed = json.loads(b"".join(envelope_body).decode("utf-8"))
-            assert parsed["source"] == "github"
+                parsed = json.loads(b"".join(message_body).decode("utf-8"))
+            assert parsed["action"] == "created"
             process_message(messages[0], receiver)
 
 

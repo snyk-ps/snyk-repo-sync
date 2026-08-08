@@ -2,7 +2,7 @@
 
 Queue-driven worker that consumes repository lifecycle events from Azure Service Bus and syncs Snyk targets for Azure DevOps and GitHub repositories.
 
-External systems (ADO audit stream via Event Grid, GitHub webhooks) publish transport messages to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice validates transport envelopes, normalizes ADO audit lifecycle events, and completes messages; Snyk sync and GitHub normalization follow in subsequent changes.
+External systems (ADO audit stream via Event Grid, GitHub webhooks) publish native JSON to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice parses queue messages, normalizes ADO audit lifecycle events, and completes messages; Snyk sync and GitHub normalization follow in subsequent changes.
 
 **Operators:** queue and ingress setup (Service Bus, ADO audit stream, GitHub webhooks) are documented in **[INGESTION.md](INGESTION.md)**. ADO audit events are batched and typically arrive within ~30 minutes.
 
@@ -93,10 +93,9 @@ uv run python src/main.py worker run
 
 ## Features
 
-- Consumes transport messages from a pre-provisioned Service Bus queue
-- Validates the shared transport envelope (`source`, `ingressId`, `receivedAt`, `rawPayload`)
-- Normalizes ADO audit lifecycle events (org, project, repository, branch) into a provider-neutral model
-- Completes valid messages; dead-letters malformed envelopes or unsupported ADO audit payloads
+- Consumes native queue messages from a pre-provisioned Service Bus queue (Event Grid JSON for ADO; raw webhook JSON for GitHub)
+- Parses provider-native message shapes and normalizes ADO audit lifecycle events (org, project, repository, branch) into a provider-neutral model
+- Completes valid messages; dead-letters unparseable messages or unsupported ADO audit payloads
 - Passes GitHub messages through without normalization (GitHub mapper deferred); Snyk sync deferred
 
 ## Testing
@@ -121,7 +120,7 @@ Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)**
 | ------- | ------------- |
 | Worker exits immediately with config error | `SERVICEBUS_CONNECTION_STRING` or `SERVICEBUS_QUEUE_NAME` missing — check `data/.env` or Container App secrets |
 | Integration tests skipped | Service Bus env vars not set |
-| Messages dead-lettered with `InvalidEnvelope` | Queue message body missing required transport fields — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+| Messages dead-lettered with `InvalidMessage` | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 | Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 
 ## Deployment
@@ -135,6 +134,6 @@ The Docker image entrypoint is `python src/main.py worker run`. Sizing, Dockerfi
 | Document | Audience |
 | -------- | -------- |
 | **[INGESTION.md](INGESTION.md)** | Service Bus, ADO audit stream, and GitHub webhook ingress setup |
-| **[CONFIGURATION.md](CONFIGURATION.md)** | Environment variables, CLI commands, transport envelope schema |
+| **[CONFIGURATION.md](CONFIGURATION.md)** | Environment variables, CLI commands, queue message shapes |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | Project layout, OpenSpec workflow, tests, CI/Docker |
 | **[openspec/SPEC.md](openspec/SPEC.md)** | Capability specifications |

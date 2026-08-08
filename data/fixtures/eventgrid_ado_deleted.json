@@ -1,8 +1,10 @@
 {
-  "source": "ado",
-  "ingressId": "b1c2d3e4-0003-4000-8000-000000000003",
-  "receivedAt": "2026-08-06T17:10:00.000Z",
-  "rawPayload": {
+  "id": "b1c2d3e4-0003-4000-8000-000000000003",
+  "subject": "AzureDevOps/Auditing",
+  "eventType": "AzureDevOpsAuditEvent",
+  "dataVersion": "1.0",
+  "eventTime": "2026-08-06T17:10:00.0000000Z",
+  "data": {
     "Id": "b1c2d3e4-0003-4000-8000-000000000003",
     "ActionId": "Git.RepositoryDeleted",
     "ScopeId": "c638432a-7f35-450f-984f-372b9d46a376",

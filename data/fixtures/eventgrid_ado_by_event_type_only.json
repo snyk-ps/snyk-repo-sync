@@ -1,13 +1,13 @@
 {
-  "source": "ado",
-  "ingressId": "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f",
-  "receivedAt": "2026-08-06T17:31:52.327Z",
-  "rawPayload": {
+  "id": "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f",
+  "eventType": "AzureDevOpsAuditEvent",
+  "dataVersion": "1.0",
+  "eventTime": "2026-08-06T17:31:52.3273845Z",
+  "data": {
     "Id": "acf86b70-4ec3-4052-9e0b-fbcdd5109c1f",
     "ActionId": "Git.RepositoryDefaultBranchChanged",
     "ScopeId": "c638432a-7f35-450f-984f-372b9d46a376",
     "ScopeDisplayName": "torstencannell (Organization)",
-    "ScopeType": 4,
     "ProjectId": "da9734d4-a91a-4f03-814b-ecc721fe24d1",
     "ProjectName": "snykDemoProject",
     "Timestamp": "2026-08-06T17:31:52.3273845Z",
