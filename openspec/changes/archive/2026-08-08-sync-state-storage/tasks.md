@@ -46,4 +46,4 @@
 
 ## 8. OpenSpec archive
 
-- [ ] 8.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/sync-state-storage/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive sync-state-storage` after review and merge
+- [x] 8.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/sync-state-storage/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive sync-state-storage` after review and merge

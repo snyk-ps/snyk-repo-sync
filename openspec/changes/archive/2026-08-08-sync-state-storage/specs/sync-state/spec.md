@@ -67,9 +67,3 @@ Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `Par
 #### Scenario: GitHub repository partition
 - **WHEN** repository state is stored for a GitHub org
 - **THEN** the partition key is `github:{orgId}` and the row key is the GitHub repository id
-
-## REMOVED Requirements
-
-### Requirement: Scope metadata schema
-**Reason:** Scope-to-Snyk mapping moves to operator config and Snyk API per `scope-mapping` capability.
-**Migration:** Remove `_meta` rows from Table Storage; configure scope mappings in operator config (next change).

@@ -152,14 +152,32 @@ The worker MUST NOT act on within-repo manifest or file changes; Repo Content Sy
 - **THEN** the worker ignores it or does not subscribe to such events
 
 ### Requirement: Operator config and credential startup
-The worker MUST authenticate to Azure Service Bus and Azure Table Storage using `DefaultAzureCredential`. It MUST load Service Bus and sync-state settings from the operator config file supplied via `--config` (default `data/config.yaml`). Settings MAY be overridden by environment variables; env values MUST take precedence when set. The worker MUST ensure the sync-state table exists on startup. Connection strings MUST NOT be supported.
+The worker MUST authenticate to Azure Service Bus and Azure Table Storage using `DefaultAzureCredential`. It MUST load operator settings from the config file path supplied via `--config` (default `data/config.yaml`). The config file MUST exist. Service Bus and sync-state settings MAY be supplied in config and MAY be overridden by environment variables; env values MUST take precedence when set. The worker MUST ensure the sync-state table exists on startup. Connection strings MUST NOT be supported or documented.
+
+The runtime identity MUST be granted:
+- **Azure Service Bus Data Owner** (or Azure Service Bus Data Receiver and Azure Service Bus Data Sender) on the queue or namespace — data plane only
+- **Storage Table Data Contributor** on the storage account or table scope
+
+The worker MUST fail fast when the config file path does not exist, when required settings are missing after config/env merge, or when credential initialization fails.
 
 #### Scenario: Worker starts in production
 - **WHEN** the container starts with `--config /config/config.yaml`, valid YAML, and a managed identity with required RBAC roles
 - **THEN** it ensures the sync-state table exists, connects to the pre-provisioned queue, and begins receiving messages
 
+#### Scenario: Local run with default config path
+- **WHEN** a developer runs `worker run` without `--config`
+- **THEN** the worker loads `data/config.yaml` and authenticates via `az login` (or configured dev principal)
+
+#### Scenario: Local run with env override
+- **WHEN** `data/config.yaml` exists and `SERVICEBUS_QUEUE_NAME` overrides the file value
+- **THEN** the worker uses the env value for the queue name
+
 #### Scenario: Missing config file
 - **WHEN** `--config` points to a path that does not exist
+- **THEN** the worker exits with a non-zero status and a clear error message
+
+#### Scenario: Missing required setting after merge
+- **WHEN** `serviceBus.fullyQualifiedNamespace` is absent in both config and env after merge
 - **THEN** the worker exits with a non-zero status and a clear error message
 
 ### Requirement: Existing queue reference only

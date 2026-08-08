@@ -29,20 +29,6 @@ The worker MUST fail fast when the config file path does not exist, when require
 - **WHEN** `serviceBus.fullyQualifiedNamespace` is absent in both config and env after merge
 - **THEN** the worker exits with a non-zero status and a clear error message
 
-## REMOVED Requirements
-
-### Requirement: Environment-driven worker startup
-**Reason:** Replaced by operator config with optional env overrides and DefaultAzureCredential for Azure services.
-**Migration:** Configure `serviceBus` and `syncState` in operator config; assign RBAC roles to the runtime identity.
-
-### Requirement: Slice-2 ADO normalization without sync
-**Reason:** Replaced by slice-3 ADO normalization with sync-table ensure on startup.
-**Migration:** Worker ensures sync-state table exists and completes ADO messages after normalization.
-
-### Requirement: Unknown scope handling
-**Reason:** Scope validation moves to `scope-mapping` capability (config + Snyk API), not Table Storage `_meta`.
-**Migration:** Unmapped scope behavior is defined in `openspec/specs/scope-mapping/spec.md` and implemented in a follow-up change.
-
 ## ADDED Requirements
 
 ### Requirement: Slice-3 ADO normalization with sync table only
