@@ -12,11 +12,11 @@ Repository lifecycle webhooks MUST be registered at the GitHub organization leve
 - **THEN** the required org webhooks point at the configured ingress URL with the correct secret
 
 ### Requirement: Manual org onboarding
-Automated GitHub org onboarding is out of scope; operators MUST manually create `_meta` state and Snyk org/integration before events are processed.
+Automated GitHub org onboarding is out of scope; operators MUST configure scope mapping in operator config and ensure the corresponding Snyk org and integration exist before events are processed.
 
-#### Scenario: Events before onboarding
-- **WHEN** webhooks arrive for an org with no `_meta` row
-- **THEN** the worker dead-letters and alerts per sync-worker unknown-scope handling
+#### Scenario: Events before scope mapping configured
+- **WHEN** webhooks arrive for an org with no entry in scope mapping config
+- **THEN** the worker logs the unmapped scope per the `scope-mapping` capability (Snyk side effects deferred until mapping is implemented)
 
 ### Requirement: GitHub credential usage
 GitHub App or PAT credentials used for webhook registration and optional metadata enrichment MUST be stored in Key Vault or container secrets and MUST NOT be logged.

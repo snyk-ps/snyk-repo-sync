@@ -2,7 +2,7 @@
 
 Slice 2 normalizes ADO lifecycle events and completes messages without storage access. Canonical sync-state schema lives in `openspec/specs/sync-state/spec.md`. The worker currently connects to Service Bus via `from_connection_string` and reads `SERVICEBUS_*` env vars.
 
-This change introduces identity-first Azure access for both Service Bus and Table Storage, a unified operator config file, and slice-3 `_meta` lookup after ADO normalization.
+This change introduces identity-first Azure access for both Service Bus and Table Storage, a unified operator config file, and slice-3 ADO normalization with sync-table ensure only. Scope mapping moves to operator config (`scope-mapping` capability — next change).
 
 ## Goals / Non-Goals
 
@@ -12,15 +12,18 @@ This change introduces identity-first Azure access for both Service Bus and Tabl
 - Load operator settings from `--config` (default `data/config.yaml`); allow env var overrides with env precedence.
 - Ensure sync-state table exists on startup (`create_table_if_not_exists`).
 - Connect to a pre-provisioned Service Bus queue (data-plane read/write only).
-- After ADO normalization, read `_meta`; DLQ + alert when missing or disabled.
-- Document RBAC roles, config schema, and table entity structure for operators.
+- After ADO normalization, complete the message (no scope mapping or repository state access in this slice).
+- Document RBAC roles, config schema, and repository entity structure for operators.
+- Add `scope-mapping` capability spec for the next change.
 
 **Non-Goals:**
 
 - Connection strings, SAS tokens, or storage account keys.
 - Service Bus queue or namespace provisioning.
 - Snyk API calls, repo lifecycle actions, idempotency enforcement.
-- Ignore-list persistence, GitHub normalization, auto `_meta` onboarding.
+- Table Storage `_meta` rows or manual scope onboarding.
+- Scope-mapping implementation (config keys, Snyk API integration lookup).
+- Ignore-list persistence, GitHub normalization.
 - Documenting or supporting legacy connection-string auth.
 
 ## Decisions
@@ -64,6 +67,8 @@ Default table name when unset: `SnykSyncState`.
 
 **Production:** Mount config at `/config/config.yaml` (Azure Files). Dockerfile passes `--config /config/config.yaml`.
 
+Scope-to-Snyk mapping config keys are specified in `openspec/specs/scope-mapping/spec.md` and implemented in a follow-up change.
+
 **Alternative rejected:** Env-only startup — operators need a stable mounted config surface for non-secret resource names.
 
 ### 3. RBAC roles
@@ -84,12 +89,9 @@ These roles do NOT grant Service Bus queue creation (control plane). The worker 
 - **Table Storage:** `create_table_if_not_exists` on startup.
 - **Service Bus:** Connect only; no create/alter/delete of queue infrastructure.
 
-### 5. Unknown / disabled scope handling
+### 5. Scope mapping deferred
 
-| Condition | Action |
-| --------- | ------ |
-| No `_meta` row | Dead-letter reason `UnknownScope` + operator alert |
-| `_meta.enabled == false` | Same |
+Scope-to-Snyk resolution is NOT read from Table Storage. Unmapped scopes are handled per `scope-mapping` spec in a follow-up change. This slice completes valid ADO messages after normalization without DLQ for missing scope config.
 
 ### 6. Slice-3 worker flow
 
@@ -101,28 +103,25 @@ flowchart TD
   D --> E{Source?}
   E -->|GitHub| F[Complete - normalization deferred]
   E -->|ADO| G[Normalize lifecycle event]
-  G --> H[Load _meta from Table Storage]
-  H --> I{Present and enabled?}
-  I -->|No| J[DLQ UnknownScope + alert]
-  I -->|Yes| K[Log scope; complete message]
+  G --> H[Log normalized event]
+  H --> I[Complete message]
 ```
 
 ### 7. Entity property mapping
 
-**`_meta` (ADO):** `PartitionKey=ado:{projectId}`, `RowKey=_meta`
+**Repository row:** `PartitionKey={source}:{scopeId}`, `RowKey={repositoryId}`
 
 | Property | Type |
 | -------- | ---- |
-| `snykOrgId` | string |
-| `integrationId` | string |
-| `integrationType` | string (`ado`) |
-| `exclusionGlobs` | string (JSON array) |
-| `adoProjectName` | string |
-| `enabled` | boolean |
+| `repoName` | string |
+| `snykTargetId` | string |
+| `defaultBranch` | string |
+| `status` | string |
+| `desiredStateHash` | string |
+| `lastEventId` | string |
+| `tagApplied` | boolean |
 
-**`_meta` (GitHub):** `PartitionKey=github:{orgId}`, `RowKey=_meta` — same pattern with `githubOrgName`.
-
-**Repository row:** `RowKey={repositoryId}` — `repoName`, `snykTargetId`, `defaultBranch`, `status`, `desiredStateHash`, `lastEventId`, `tagApplied`.
+Repository rows are written after successful Snyk actions in a follow-up change.
 
 ### 8. Dockerfile entrypoint
 
@@ -139,15 +138,16 @@ CMD ["worker", "run", "--config", "/config/config.yaml"]
 | Missing RBAC | Document role assignment checklist in CONFIGURATION.md |
 | Config mount missing in prod | Fail fast if `--config` path does not exist |
 | Breaking removal of connection strings | No legacy docs; operator guide leads to MI + RBAC + config mount |
+| ADO events complete without Snyk actions | Expected in slice 3; scope mapping + Snyk sync in follow-up changes |
 
 ## Migration Plan
 
-Not applicable — connection strings are unsupported. Operators deploy with:
+Not applicable — connection strings and `_meta` rows are unsupported. Operators deploy with:
 
 1. Pre-provisioned Service Bus queue and storage account.
 2. Managed identity with both RBAC roles.
 3. Config file mounted at `/config/config.yaml`.
-4. Remove any `SERVICEBUS_CONNECTION_STRING` secrets from Container App configuration.
+4. Remove any `SERVICEBUS_CONNECTION_STRING` secrets and `_meta` Table Storage rows from prior designs.
 
 ## Open Questions
 

@@ -2,7 +2,7 @@
 
 Operator guide for provisioning **customer-owned queue infrastructure** and **event ingress** that delivers repository lifecycle events to the shared Service Bus queue. The worker in this repository only **consumes** that queue; it does not create Service Bus resources or Event Grid topics.
 
-For worker configuration (`SERVICEBUS_CONNECTION_STRING`, queue message shapes), see **[CONFIGURATION.md](CONFIGURATION.md)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
+For worker configuration (operator config file, RBAC, queue message shapes), see **[CONFIGURATION.md](CONFIGURATION.md)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
 
 ## Architecture
 
@@ -90,25 +90,22 @@ az servicebus queue create \
   --enable-dead-lettering-on-message-expiration true
 ```
 
-### Connection strings
+### Worker authentication (RBAC)
 
-Retrieve connection strings from **Settings → Shared access policies** (or via CLI):
+The worker uses **`DefaultAzureCredential`** and operator config — not Service Bus connection strings. Assign the Container App managed identity:
 
-```bash
-az servicebus namespace authorization-rule keys list \
-  --resource-group "$RESOURCE_GROUP" \
-  --namespace-name "$NAMESPACE" \
-  --name RootManageSharedAccessKey \
-  --query primaryConnectionString \
-  --output tsv
-```
+| Role | Scope |
+| ---- | ----- |
+| **Azure Service Bus Data Owner** | Service Bus namespace or queue |
+| **Storage Table Data Contributor** | Storage account |
 
-Store secrets in Key Vault or your Container App secret store. **Never** commit connection strings to source control.
+Mount operator config at `/config/config.yaml` with `serviceBus.fullyQualifiedNamespace`, `serviceBus.queueName`, and `syncState.storageAccountEndpoint`. See **[CONFIGURATION.md](CONFIGURATION.md)**.
 
-| Consumer | Variables / secrets |
-| -------- | ------------------- |
-| Worker | `SERVICEBUS_CONNECTION_STRING`, `SERVICEBUS_QUEUE_NAME` |
-| GitHub webhook ingress | Send-capable connection string and queue name |
+Local development: `az login` with the same RBAC roles on your dev namespace and storage account.
+
+### GitHub webhook ingress credentials
+
+GitHub webhook ingress (customer-owned) may use a send-capable Service Bus connection string or RBAC, depending on your ingress implementation. Store credentials in Key Vault or your ingress secret store. **Never** commit secrets to source control.
 
 ---
 

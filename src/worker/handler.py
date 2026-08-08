@@ -1,4 +1,4 @@
-"""Slice-2 message handling: parse native queue messages, normalize ADO events."""
+"""Slice-3 message handling: parse and normalize ADO lifecycle events."""
 
 import logging
 from dataclasses import dataclass
@@ -21,7 +21,7 @@ def handle_queue_message(body: str | bytes) -> HandleResult:
     """Parse a native queue message and normalize supported ADO lifecycle events.
 
     GitHub messages are parsed and passed through without normalization.
-    Sync actions are intentionally omitted in this slice.
+    Scope mapping and Snyk side effects are intentionally omitted in this slice.
 
     Args:
         body: Raw queue message body.

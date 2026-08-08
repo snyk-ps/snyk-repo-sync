@@ -35,4 +35,5 @@ ENV PATH="/app/.venv/bin:$PATH"
 USER nonroot
 WORKDIR /app
 
-CMD ["python", "src/main.py", "worker", "run"]
+ENTRYPOINT ["python", "src/main.py"]
+CMD ["worker", "run", "--config", "/config/config.yaml"]

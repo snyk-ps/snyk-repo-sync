@@ -73,13 +73,14 @@ Unit tests run by default. Integration tests are marked with `@pytest.mark.integ
 # Unit tests only
 uv run pytest -m "not integration"
 
-# Integration tests (requires existing queue)
-export SERVICEBUS_CONNECTION_STRING="Endpoint=sb://..."
-export SERVICEBUS_QUEUE_NAME="repo-sync-events"
+# Integration tests (requires config + Azure credentials)
+cp data/config.yaml.example data/config.yaml
+# edit data/config.yaml with dev Service Bus and Table Storage settings
+az login
 uv run pytest -m integration
 ```
 
-Integration tests publish native queue message fixtures from `data/fixtures/` to the configured queue and assert the worker completes them. Use a dedicated test namespace or the [Azure Service Bus emulator](https://learn.microsoft.com/en-us/azure/service-bus-messaging/test-locally-with-service-bus-emulator) — never run integration tests against production queues without understanding side effects.
+Integration tests publish native queue message fixtures from `data/fixtures/` to the configured queue and assert the worker completes them. They require `data/config.yaml` (or `WORKER_CONFIG_PATH`) and `DefaultAzureCredential` (`az login` or service principal with **Azure Service Bus Data Owner** and **Storage Table Data Contributor**). Use a dedicated test namespace — never run integration tests against production queues without understanding side effects.
 
 Add test runners and tools as dev dependencies in `pyproject.toml` and sync with uv. Configure pytest so **`src`** is on the import path (for example `pythonpath = ["src"]` and `testpaths = ["tests"]` under `[tool.pytest.ini_options]`).
 

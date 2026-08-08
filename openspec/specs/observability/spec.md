@@ -18,9 +18,9 @@ The worker, webhook ingress, and scheduled jobs MUST emit structured operational
 ### Requirement: DLQ alerting via Dynatrace
 When messages are dead-lettered or unrecoverable failures occur, the system MUST raise alerts in Dynatrace (not App Insights action groups in v1).
 
-#### Scenario: Unknown scope DLQ
-- **WHEN** a message is dead-lettered due to missing `_meta`
-- **THEN** Dynatrace receives an alert suitable for operator response
+#### Scenario: Unmapped scope
+- **WHEN** a message is processed for a scope with no entry in scope mapping config
+- **THEN** Dynatrace receives a log or alert suitable for operator response per the `scope-mapping` capability
 
 ### Requirement: No secret leakage in logs
 Logs MUST NOT contain Snyk tokens, ADO PATs, GitHub tokens or App credentials, webhook secrets, or other secrets.

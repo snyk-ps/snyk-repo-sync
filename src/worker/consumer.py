@@ -1,11 +1,13 @@
 """Service Bus queue consumer for the worker."""
 
 import logging
-from typing import Protocol
+from typing import Any, Protocol
 
+from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusReceivedMessage
 
-from config.service_bus import ServiceBusSettings
+from config.settings import WorkerSettings
+from sync_state import SyncStateStore
 from worker.handler import handle_queue_message
 from worker.message import INVALID_MESSAGE_REASON, MessageParseError
 from worker.normalize import INVALID_NORMALIZATION_REASON, NormalizationError
@@ -31,6 +33,28 @@ class QueueReceiver(Protocol):
     ) -> None: ...
 
 
+class ServiceBusClientFactory(Protocol):
+    """Factory protocol for ServiceBusClient construction."""
+
+    def __call__(
+        self,
+        *,
+        fully_qualified_namespace: str,
+        credential: Any,
+    ) -> ServiceBusClient: ...
+
+
+def _default_service_bus_client_factory(
+    *,
+    fully_qualified_namespace: str,
+    credential: Any,
+) -> ServiceBusClient:
+    return ServiceBusClient(
+        fully_qualified_namespace=fully_qualified_namespace,
+        credential=credential,
+    )
+
+
 def _message_body(message: ServiceBusReceivedMessage) -> bytes:
     body = message.body
     if isinstance(body, bytes):
@@ -46,6 +70,7 @@ def _message_body(message: ServiceBusReceivedMessage) -> bytes:
             part if isinstance(part, bytes) else part.encode("utf-8") for part in body
         )
     return b"".join(body)
+
 
 def process_message(message: ServiceBusReceivedMessage, receiver: QueueReceiver) -> None:
     """Process one queue message: parse, complete, or dead-letter.
@@ -83,26 +108,33 @@ class WorkerConsumer:
 
     def __init__(
         self,
-        settings: ServiceBusSettings,
+        settings: WorkerSettings,
+        sync_state: SyncStateStore,
         *,
         max_wait_time: int = DEFAULT_MAX_WAIT_TIME,
-        client_factory=ServiceBusClient,
+        credential: Any | None = None,
+        client_factory: ServiceBusClientFactory | None = None,
     ) -> None:
         self._settings = settings
+        self._sync_state = sync_state
         self._max_wait_time = max_wait_time
-        self._client_factory = client_factory
+        self._credential = credential if credential is not None else DefaultAzureCredential()
+        self._client_factory = client_factory or _default_service_bus_client_factory
 
     def run(self) -> None:
         """Receive and process messages until interrupted."""
         logger.info(
-            "Starting worker consumer queue_name=%s",
-            self._settings.queue_name,
+            "Starting worker consumer queue_name=%s namespace=%s table_name=%s",
+            self._settings.service_bus.queue_name,
+            self._settings.service_bus.fully_qualified_namespace,
+            self._sync_state.table_name,
         )
-        with self._client_factory.from_connection_string(
-            self._settings.connection_string
+        with self._client_factory(
+            fully_qualified_namespace=self._settings.service_bus.fully_qualified_namespace,
+            credential=self._credential,
         ) as client:
             with client.get_queue_receiver(
-                self._settings.queue_name,
+                self._settings.service_bus.queue_name,
                 max_wait_time=self._max_wait_time,
             ) as receiver:
                 for message in receiver:

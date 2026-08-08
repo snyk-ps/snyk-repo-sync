@@ -36,3 +36,27 @@ def test_handle_default_branch_changed_without_previous_branch_completes(caplog)
     assert result.normalized.payload == {"defaultBranch": "main"}
     assert "no sync action needed" in caplog.text
     assert "Normalized ADO lifecycle event" not in caplog.text
+
+
+def test_handle_ado_created_normalizes_and_returns_event() -> None:
+    body = json.dumps(
+        {
+            "subject": "AzureDevOps/Auditing",
+            "eventType": "AzureDevOpsAuditEvent",
+            "data": {
+                "Id": "evt-1",
+                "ActionId": "Git.RepositoryCreated",
+                "ScopeId": "org",
+                "ScopeDisplayName": "org",
+                "ProjectId": "proj",
+                "ProjectName": "proj",
+                "Timestamp": "2026-08-07T17:50:45.8246565Z",
+                "Data": {"RepoId": "repo", "RepoName": "demo"},
+            },
+        }
+    ).encode("utf-8")
+
+    result = handle_queue_message(body)
+
+    assert result.normalized is not None
+    assert result.normalized.event_type == "repo.created"

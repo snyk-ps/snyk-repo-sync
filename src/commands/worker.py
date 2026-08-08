@@ -3,7 +3,10 @@
 import argparse
 import logging
 
-from config.service_bus import ServiceBusConfigError, load_service_bus_settings
+from azure.identity import DefaultAzureCredential
+
+from config.settings import ConfigError, DEFAULT_CONFIG_PATH, load_worker_settings
+from sync_state import SyncStateStore
 from worker.consumer import WorkerConsumer
 
 logger = logging.getLogger(__name__)
@@ -11,6 +14,7 @@ logger = logging.getLogger(__name__)
 _NOISY_LOGGERS = (
     "azure",
     "azure.servicebus",
+    "azure.identity",
     "uamqp",
 )
 
@@ -26,16 +30,24 @@ def configure_logging() -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def run_worker(_args: argparse.Namespace) -> int:
+def run_worker(args: argparse.Namespace) -> int:
     """Start the queue consumer."""
     configure_logging()
     try:
-        settings = load_service_bus_settings()
-    except ServiceBusConfigError as exc:
+        settings = load_worker_settings(args.config)
+    except ConfigError as exc:
         logger.error("%s", exc)
         return 1
 
-    consumer = WorkerConsumer(settings)
+    credential = DefaultAzureCredential()
+    sync_state = SyncStateStore(settings.sync_state, credential=credential)
+    try:
+        sync_state.ensure_table()
+    except Exception as exc:
+        logger.error("Failed to ensure sync-state table: %s", exc)
+        return 1
+
+    consumer = WorkerConsumer(settings, sync_state, credential=credential)
     try:
         consumer.run()
     except KeyboardInterrupt:
@@ -51,5 +63,10 @@ def register_worker_commands(subparsers: argparse._SubParsersAction) -> None:
     run_parser = worker_subparsers.add_parser(
         "run",
         help="Consume queue messages from the Service Bus queue",
+    )
+    run_parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG_PATH,
+        help=f"Operator config file path (default: {DEFAULT_CONFIG_PATH})",
     )
     run_parser.set_defaults(func=run_worker)

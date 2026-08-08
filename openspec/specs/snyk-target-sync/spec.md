@@ -25,12 +25,12 @@ Target removal MUST use deactivation, not hard delete.
 - **WHEN** a repository is deleted in ADO or GitHub
 - **THEN** the corresponding Snyk target is deactivated
 
-### Requirement: Exclusion globs from scope config
-Imports MUST carry forward `exclusionGlobs` from scope `_meta` (sourced from org config); `.snyk` file exclusions MUST NOT be used for this orchestration layer.
+### Requirement: Exclusion globs from scope mapping
+Imports MUST carry forward `exclusionGlobs` from the scope mapping config entry for the ADO project or GitHub org; `.snyk` file exclusions MUST NOT be used for this orchestration layer.
 
 #### Scenario: Import with exclusions
-- **WHEN** a repository is imported
-- **THEN** the import request includes `exclusionGlobs` from `_meta`
+- **WHEN** a repository is imported for a mapped scope
+- **THEN** the import request includes `exclusionGlobs` from scope mapping config
 
 ### Requirement: No ignore migration
 When deactivating and re-importing (rename or default branch change), issue ignores MUST NOT be migrated; this matches Repo Content Sync rename limitations.

@@ -1,7 +1,11 @@
 ## Purpose
 
 Queue-driven worker that normalizes provider events, validates state, routes repo lifecycle events by source, enforces idempotency, and handles retries and dead-lettering. Event normalization is owned by the worker application in this repository so lifecycle mapping ships with worker releases rather than customer-owned ingress infrastructure.
+
+Scope-to-Snyk resolution is owned by the `scope-mapping` capability (operator config + Snyk API), not Table Storage `_meta` rows.
+
 ## Requirements
+
 ### Requirement: Queue-driven processing
 The worker MUST consume messages from the Service Bus queue on demand; it MUST NOT rely on always-on polling of ADO, GitHub, or Snyk as its primary trigger.
 
@@ -95,14 +99,14 @@ Branch values in `payload` MUST NOT include the `refs/heads/` prefix.
 - **THEN** it completes the message without normalization or sync side effects
 
 ### Requirement: Source-aware processing flow
-For each normalized event, the worker MUST: route by `source` to load the correct `_meta` partition; read repository state (if applicable); perform idempotency check; execute the mapped action; update repository state; complete or dead-letter the message.
+For each normalized event, the worker MUST: resolve scope mapping per the `scope-mapping` capability; read repository state from sync state (if applicable); perform idempotency check; execute the mapped action; update repository state; complete or dead-letter the message.
 
 #### Scenario: Successful ADO repo create
-- **WHEN** a repo-created event with `source: "ado"` passes idempotency checks
+- **WHEN** a repo-created event with `source: "ado"` passes idempotency checks and scope mapping resolves a Snyk org
 - **THEN** the worker imports and tags the target, updates repo state, and completes the message
 
 #### Scenario: Successful GitHub repo create
-- **WHEN** a repo-created event with `source: "github"` passes idempotency checks
+- **WHEN** a repo-created event with `source: "github"` passes idempotency checks and scope mapping resolves a Snyk org
 - **THEN** the worker imports and tags the target, updates repo state, and completes the message
 
 ### Requirement: Idempotency by event and desired state
@@ -111,17 +115,6 @@ The worker MUST skip duplicate processing when `lastEventId` matches the incomin
 #### Scenario: Duplicate delivery
 - **WHEN** the same `eventId` is delivered twice for a repository row
 - **THEN** the worker completes the message without repeating Snyk side effects
-
-### Requirement: Unknown scope handling
-When an event references a scope (ADO project or GitHub org) with no `_meta` row, the worker MUST dead-letter the message and emit an alert.
-
-#### Scenario: Missing ADO project metadata
-- **WHEN** a message arrives for an unknown ADO `scopeId`
-- **THEN** the message is sent to the DLQ and an alert is raised in Dynatrace
-
-#### Scenario: Missing GitHub org metadata
-- **WHEN** a message arrives for an unknown GitHub `scopeId`
-- **THEN** the message is sent to the DLQ and an alert is raised in Dynatrace
 
 ### Requirement: Unrecoverable failure handling
 On unrecoverable processing failure, the worker MUST dead-letter the message and emit an alert.
@@ -158,19 +151,19 @@ The worker MUST NOT act on within-repo manifest or file changes; Repo Content Sy
 - **WHEN** a manifest or file change event is received (if any)
 - **THEN** the worker ignores it or does not subscribe to such events
 
-### Requirement: Environment-driven worker startup
-The worker MUST read Service Bus connection settings from environment variables injected by the Container App. It MUST NOT require a configuration file. It MUST fail fast at startup when required environment variables are missing.
+### Requirement: Operator config and credential startup
+The worker MUST authenticate to Azure Service Bus and Azure Table Storage using `DefaultAzureCredential`. It MUST load Service Bus and sync-state settings from the operator config file supplied via `--config` (default `data/config.yaml`). Settings MAY be overridden by environment variables; env values MUST take precedence when set. The worker MUST ensure the sync-state table exists on startup. Connection strings MUST NOT be supported.
 
-#### Scenario: Worker starts with valid environment
-- **WHEN** the worker container starts with Service Bus connection settings in the environment
-- **THEN** it connects to the configured queue and begins receiving messages
+#### Scenario: Worker starts in production
+- **WHEN** the container starts with `--config /config/config.yaml`, valid YAML, and a managed identity with required RBAC roles
+- **THEN** it ensures the sync-state table exists, connects to the pre-provisioned queue, and begins receiving messages
 
-#### Scenario: Missing Service Bus environment
-- **WHEN** a required Service Bus environment variable is not set at startup
+#### Scenario: Missing config file
+- **WHEN** `--config` points to a path that does not exist
 - **THEN** the worker exits with a non-zero status and a clear error message
 
 ### Requirement: Existing queue reference only
-The worker MUST consume from a pre-provisioned Service Bus queue. This change MUST NOT create, alter, or delete Service Bus queues or namespaces.
+The worker MUST consume from a pre-provisioned Service Bus queue. The worker MUST NOT create, alter, or delete Service Bus queues or namespaces.
 
 #### Scenario: Queue consumption
 - **WHEN** transport messages are available on the configured queue
@@ -187,16 +180,16 @@ The repository MUST include integration tests that publish native queue message 
 - **WHEN** an integration test publishes a raw GitHub webhook fixture to the queue
 - **THEN** the worker receives and completes the message
 
-### Requirement: Slice-2 ADO normalization without sync
-In this implementation slice, after successful native queue message parsing the worker MUST normalize supported ADO audit lifecycle events into the normalized model, emit structured logs for the normalized event (including `event_type`, `scope_id`, `repository_id`, `event_id`, and ADO org/project context), and complete the message without sync state access or Snyk side effects.
+### Requirement: Slice-3 ADO normalization with sync table only
+In this implementation slice, after successful ADO lifecycle normalization the worker MUST log the normalized event and complete the message without scope mapping, repository state reads/writes, or Snyk side effects. The sync-state table MUST be ensured on startup for use by follow-up changes.
 
 GitHub queue messages MUST be completed without normalization or sync side effects until GitHub normalization is implemented.
 
-#### Scenario: Valid ADO message normalized in slice 2
+#### Scenario: Valid ADO message normalized in slice 3
 - **WHEN** the worker parses and normalizes a supported ADO Event Grid lifecycle message
 - **THEN** it logs normalized org, project, repository, and branch fields as applicable, then completes the message
 
-#### Scenario: Valid GitHub message in slice 2
+#### Scenario: Valid GitHub message in slice 3
 - **WHEN** the worker parses a valid GitHub webhook queue message
 - **THEN** it completes the message without normalization or sync actions
 
@@ -222,4 +215,3 @@ Unrecognized or invalid JSON MUST dead-letter with reason `InvalidMessage`.
 #### Scenario: Malformed queue message
 - **WHEN** the worker receives a message that is not valid JSON, is not a JSON object, or matches no supported provider shape
 - **THEN** it dead-letters the message with reason `InvalidMessage`
-

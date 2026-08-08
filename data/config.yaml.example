@@ -1,0 +1,11 @@
+# Operator configuration (non-secrets).
+# Mount at /config/config.yaml in production (Azure Files).
+# Authenticate with DefaultAzureCredential (managed identity or `az login`).
+
+serviceBus:
+  fullyQualifiedNamespace: mynamespace.servicebus.windows.net
+  queueName: repo-sync-events
+
+syncState:
+  storageAccountEndpoint: https://myaccount.table.core.windows.net
+  # tableName: SnykSyncState

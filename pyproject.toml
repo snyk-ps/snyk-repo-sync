@@ -5,7 +5,10 @@ description = "Queue-driven worker for ADO and GitHub repository lifecycle sync 
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "azure-data-tables>=12.7.0",
+    "azure-identity>=1.25.3",
     "azure-servicebus>=7.12.0",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]

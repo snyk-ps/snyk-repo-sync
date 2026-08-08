@@ -48,9 +48,28 @@ On startup, the application MUST call `create_table_if_not_exists` for the confi
 - **WHEN** the worker starts and the configured table already exists
 - **THEN** startup succeeds without error
 
-### Requirement: Entity property types
-Scope `_meta` and repository rows MUST persist spec fields as Azure Table entity properties: string fields as strings, `enabled` and `tagApplied` as booleans, and `exclusionGlobs` as a JSON-encoded string array.
+### Requirement: Repository entity property types
+Repository rows MUST persist spec fields as Azure Table entity properties: string fields as strings and `tagApplied` as a boolean.
 
-#### Scenario: ADO _meta round-trip
-- **WHEN** an ADO `_meta` row is written and read back
-- **THEN** all required ADO scope fields are present with correct types
+#### Scenario: Repository row round-trip
+- **WHEN** a repository row is written and read back
+- **THEN** all required repository fields are present with correct types
+
+## MODIFIED Requirements
+
+### Requirement: Table name and keys
+Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `PartitionKey = {source}:{scopeId}` where `source` is `ado` or `github`, and `RowKey = {repositoryId}`. Scope configuration MUST NOT be stored in Table Storage; scope mapping is owned by the `scope-mapping` capability.
+
+#### Scenario: ADO repository partition
+- **WHEN** repository state is stored for an ADO project
+- **THEN** the partition key is `ado:{projectId}` and the row key is the ADO repository id
+
+#### Scenario: GitHub repository partition
+- **WHEN** repository state is stored for a GitHub org
+- **THEN** the partition key is `github:{orgId}` and the row key is the GitHub repository id
+
+## REMOVED Requirements
+
+### Requirement: Scope metadata schema
+**Reason:** Scope-to-Snyk mapping moves to operator config and Snyk API per `scope-mapping` capability.
+**Migration:** Remove `_meta` rows from Table Storage; configure scope mappings in operator config (next change).

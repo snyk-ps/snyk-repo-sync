@@ -1,20 +1,5 @@
 ## MODIFIED Requirements
 
-### Requirement: Unknown scope handling
-When an event references a scope (ADO project or GitHub org) with no `_meta` row, or with a `_meta` row where `enabled` is false, the worker MUST dead-letter the message with reason `UnknownScope` and emit an alert.
-
-#### Scenario: Missing ADO project metadata
-- **WHEN** a message arrives for an unknown ADO `scopeId`
-- **THEN** the message is dead-lettered with reason `UnknownScope` and an alert is raised in Dynatrace
-
-#### Scenario: Disabled ADO scope
-- **WHEN** a message arrives for an ADO scope whose `_meta.enabled` is false
-- **THEN** the message is dead-lettered with reason `UnknownScope` and an alert is raised in Dynatrace
-
-#### Scenario: Missing GitHub org metadata
-- **WHEN** a message arrives for an unknown GitHub `scopeId`
-- **THEN** the message is dead-lettered with reason `UnknownScope` and an alert is raised in Dynatrace
-
 ### Requirement: Operator config and credential startup
 The worker MUST authenticate to Azure Service Bus and Azure Table Storage using `DefaultAzureCredential`. It MUST load operator settings from the config file path supplied via `--config` (default `data/config.yaml`). The config file MUST exist. Service Bus and sync-state settings MAY be supplied in config and MAY be overridden by environment variables; env values MUST take precedence when set. Connection strings MUST NOT be supported or documented.
 
@@ -51,20 +36,24 @@ The worker MUST fail fast when the config file path does not exist, when require
 **Migration:** Configure `serviceBus` and `syncState` in operator config; assign RBAC roles to the runtime identity.
 
 ### Requirement: Slice-2 ADO normalization without sync
-**Reason:** Replaced by slice-3 _meta lookup after ADO normalization.
-**Migration:** Worker loads sync state and reads `_meta` before completing ADO messages.
+**Reason:** Replaced by slice-3 ADO normalization with sync-table ensure on startup.
+**Migration:** Worker ensures sync-state table exists and completes ADO messages after normalization.
+
+### Requirement: Unknown scope handling
+**Reason:** Scope validation moves to `scope-mapping` capability (config + Snyk API), not Table Storage `_meta`.
+**Migration:** Unmapped scope behavior is defined in `openspec/specs/scope-mapping/spec.md` and implemented in a follow-up change.
 
 ## ADDED Requirements
 
-### Requirement: Slice-3 ADO normalization with _meta lookup
-In this implementation slice, after successful ADO lifecycle normalization the worker MUST load scope `_meta` from sync state for partition `{source}:{scopeId}`. When `_meta` is missing or `enabled` is false, the worker MUST dead-letter the message with reason `UnknownScope` and emit an alert. When `_meta` is present and enabled, the worker MUST log scope context and complete the message without Snyk side effects.
+### Requirement: Slice-3 ADO normalization with sync table only
+In this implementation slice, after successful ADO lifecycle normalization the worker MUST log the normalized event and complete the message without scope mapping, repository state reads/writes, or Snyk side effects. The sync-state table MUST be ensured on startup for use by follow-up changes.
 
 GitHub queue messages MUST be completed without normalization or sync side effects until GitHub normalization is implemented.
 
-#### Scenario: Valid ADO message with known enabled scope
-- **WHEN** the worker normalizes a supported ADO lifecycle message and `_meta` exists with `enabled: true`
-- **THEN** it logs scope metadata and completes the message
+#### Scenario: Valid ADO message normalized in slice 3
+- **WHEN** the worker parses and normalizes a supported ADO Event Grid lifecycle message
+- **THEN** it logs normalized org, project, repository, and branch fields as applicable, then completes the message
 
-#### Scenario: Valid ADO message with unknown scope
-- **WHEN** the worker normalizes an ADO message and no `_meta` row exists for the scope partition
-- **THEN** it dead-letters the message with reason `UnknownScope` and raises an operator alert
+#### Scenario: Valid GitHub message in slice 3
+- **WHEN** the worker parses a valid GitHub webhook queue message
+- **THEN** it completes the message without normalization or sync actions
