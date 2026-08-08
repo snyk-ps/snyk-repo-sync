@@ -2,28 +2,6 @@
 
 Deliver ADO audit stream and GitHub webhook events to a single Service Bus queue shared with GitHub webhook ingress. Ingress is customer-owned infrastructure; it validates and forwards provider-native payloads without lifecycle normalization.
 ## Requirements
-### Requirement: Multi-source transport envelope
-All ingress paths (ADO and GitHub) MUST publish to one Service Bus queue using a transport envelope that includes: `source`, `ingressId`, `receivedAt`, and `rawPayload` (the provider-native event body). Ingress MUST NOT perform lifecycle normalization; that is owned by the worker application in this repository.
-
-| Field         | ADO                              | GitHub                          |
-| ------------- | -------------------------------- | ------------------------------- |
-| `source`      | `"ado"`                          | `"github"`                      |
-| `ingressId`   | audit event `Id`                 | `X-GitHub-Delivery` GUID        |
-| `receivedAt`  | ingress receive timestamp        | ingress receive timestamp       |
-| `rawPayload`  | ADO audit record body            | GitHub webhook JSON body        |
-
-#### Scenario: ADO audit stream repo lifecycle event
-- **WHEN** ADO audit stream reports a Git repository created, renamed, deleted, or default-branch-changed event
-- **THEN** the ingress path publishes one transport message with `source: "ado"` and the raw audit record in `rawPayload` to the Service Bus queue
-
-#### Scenario: Audit stream default branch event
-- **WHEN** ADO audit stream reports a repository default branch change
-- **THEN** Event Grid forwards one transport message with `source: "ado"` and the raw audit payload to the same Service Bus queue
-
-#### Scenario: GitHub webhook lifecycle event
-- **WHEN** GitHub delivers a repository lifecycle webhook accepted by github-webhook-ingestion
-- **THEN** the message includes `source: "github"`, the delivery GUID as `ingressId`, and the raw webhook body in `rawPayload`
-
 ### Requirement: Cloud ADO only
 ADO event ingestion MUST support Azure DevOps Cloud (`dev.azure.com`) only.
 
@@ -31,17 +9,44 @@ ADO event ingestion MUST support Azure DevOps Cloud (`dev.azure.com`) only.
 - **WHEN** an event originates from ADO Server (on-premises)
 - **THEN** the system does not ingest or process it (out of scope)
 
-### Requirement: Worker-side transport consumption
-The worker application MUST consume transport messages from the same Service Bus queue that external ingress paths publish to. The worker MUST deserialize messages using the transport envelope schema (`source`, `ingressId`, `receivedAt`, `rawPayload`).
-
-#### Scenario: Worker receives published transport message
-- **WHEN** an external ingress path publishes a transport message to the queue
-- **THEN** the worker container can receive and deserialize that message
-
 ### Requirement: Existing queue only
 Queue infrastructure MUST be provisioned outside this repository. The worker MUST reference the existing queue via environment configuration and MUST NOT create or manage Service Bus resources.
 
 #### Scenario: No queue provisioning in worker
 - **WHEN** the worker application is deployed
 - **THEN** it connects to the pre-existing queue without creating queue infrastructure
+
+### Requirement: Native queue message contract
+All messages on the shared Service Bus queue MUST be provider-native JSON bodies. The worker MUST NOT require `source`, `ingressId`, `receivedAt`, or `rawPayload` wrapper fields.
+
+ADO messages MUST be Event Grid schema JSON delivered from an Event Grid subscription to Service Bus. The audit record MUST appear in the `data` property.
+
+GitHub messages MUST be the raw signed webhook JSON body published after signature validation and delivery deduplication.
+
+#### Scenario: ADO Event Grid message on queue
+- **WHEN** Event Grid delivers an ADO audit event to Service Bus after subscription filtering
+- **THEN** the queue message body is Event Grid JSON with audit fields under `data`
+
+#### Scenario: GitHub webhook message on queue
+- **WHEN** GitHub webhook ingress accepts a signed repository lifecycle webhook
+- **THEN** the queue message body is the raw webhook JSON without a transport envelope wrapper
+
+### Requirement: ADO Event Grid subscription filters
+ADO Event Grid subscriptions that forward to Service Bus MUST use advanced filters on `subject` and `data.ActionId`. Operators MUST configure:
+
+| Filter | Key | Operator | Values |
+| ------ | --- | -------- | ------ |
+| Subject | `subject` | String in | `AzureDevOps/Auditing` |
+| Lifecycle | `data.ActionId` | String in | `Git.RepositoryCreated`, `Git.RepositoryRenamed`, `Git.RepositoryDeleted`, `Git.RepositoryDefaultBranchChanged` |
+
+#### Scenario: Subscription filters configured
+- **WHEN** an operator configures the Event Grid subscription per INGESTION.md
+- **THEN** only auditing-subject and supported Git lifecycle audit events are delivered to Service Bus
+
+### Requirement: Worker-side native queue consumption
+The worker application MUST consume messages from the same Service Bus queue. The worker MUST parse native queue message bodies and infer `source` from message structure before normalization.
+
+#### Scenario: Worker receives Event Grid message
+- **WHEN** an Event Grid JSON message is available on the queue
+- **THEN** the worker parses the audit record from `data` and processes it as an ADO message
 

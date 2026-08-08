@@ -1,9 +1,7 @@
 ## Purpose
 
 Receive GitHub organization repository webhooks on customer-owned ingress infrastructure, validate authenticity, deduplicate deliveries, and publish raw payloads to the Service Bus queue. Lifecycle normalization is performed by the worker application in this repository.
-
 ## Requirements
-
 ### Requirement: Webhook signature validation
 The ingress endpoint MUST validate `X-Hub-Signature-256` using the configured webhook secret before accepting or enqueueing a payload.
 
@@ -23,11 +21,11 @@ The ingress path MUST deduplicate by GitHub delivery ID (`X-GitHub-Delivery`) be
 - **THEN** only the first accepted delivery is published; subsequent duplicates are acknowledged without re-publishing
 
 ### Requirement: Raw payload publish
-GitHub webhooks MUST be published to the same Service Bus queue using the shared transport envelope with `source: "github"`, `ingressId` set to the delivery GUID, `receivedAt`, and the provider-native webhook body in `rawPayload`. Lifecycle normalization MUST be performed by the worker application in this repository, not by customer-owned ingress infrastructure.
+GitHub webhooks MUST be published to the same Service Bus queue as the raw webhook JSON body after signature validation and delivery deduplication. Lifecycle normalization MUST be performed by the worker application in this repository, not by customer-owned ingress infrastructure.
 
 #### Scenario: Repository lifecycle webhook accepted
 - **WHEN** GitHub delivers a signed `repository` webhook
-- **THEN** one transport message containing the raw webhook body is published to the queue
+- **THEN** one queue message containing the raw webhook JSON body is published to the queue
 
 ### Requirement: Secret handling
 The webhook secret MUST be stored in Key Vault or environment configuration and MUST NOT appear in logs.
@@ -35,3 +33,4 @@ The webhook secret MUST be stored in Key Vault or environment configuration and 
 #### Scenario: Startup or validation failure logging
 - **WHEN** signature validation or configuration errors are logged
 - **THEN** the webhook secret value is omitted or redacted
+
