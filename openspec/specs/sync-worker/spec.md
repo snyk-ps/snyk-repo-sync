@@ -198,18 +198,28 @@ The repository MUST include integration tests that publish native queue message 
 - **WHEN** an integration test publishes a raw GitHub webhook fixture to the queue
 - **THEN** the worker receives and completes the message
 
-### Requirement: Slice-3 ADO normalization with sync table only
-In this implementation slice, after successful ADO lifecycle normalization the worker MUST log the normalized event and complete the message without scope mapping, repository state reads/writes, or Snyk side effects. The sync-state table MUST be ensured on startup for use by follow-up changes.
+### Requirement: Slice-4 ADO normalization with scope mapping
+After successful ADO lifecycle normalization, the worker MUST resolve scope mapping per the `scope-mapping` capability using `ado.projectName` as the lookup key, log the resolution outcome (mapped, default, or unmapped), and complete the message without repository state reads/writes or Snyk API side effects.
 
-GitHub queue messages MUST be completed without normalization or sync side effects until GitHub normalization is implemented.
+The sync-state table MUST be ensured on startup for use by follow-up changes.
 
-#### Scenario: Valid ADO message normalized in slice 3
-- **WHEN** the worker parses and normalizes a supported ADO Event Grid lifecycle message
-- **THEN** it logs normalized org, project, repository, and branch fields as applicable, then completes the message
+GitHub queue messages MUST be completed without normalization or sync side effects until GitHub normalization is implemented. GitHub scope mapping entries MUST be loaded from config at startup for use by follow-up changes.
 
-#### Scenario: Valid GitHub message in slice 3
+#### Scenario: Valid ADO message with mapped project
+- **WHEN** the worker normalizes an ADO lifecycle message whose `ado.projectName` matches a config entry
+- **THEN** it logs the resolved `snykOrgId`, then completes the message
+
+#### Scenario: Valid ADO message with unmapped project
+- **WHEN** the worker normalizes an ADO lifecycle message whose `ado.projectName` has no config entry and no `defaultSnykOrgId` is configured
+- **THEN** it logs an unmapped-scope warning and completes the message
+
+#### Scenario: Valid ADO message with default org
+- **WHEN** the worker normalizes an ADO lifecycle message for an unmapped project and `defaultSnykOrgId` is configured
+- **THEN** it logs use of the default Snyk org id and completes the message
+
+#### Scenario: Valid GitHub message in slice 4
 - **WHEN** the worker parses a valid GitHub webhook queue message
-- **THEN** it completes the message without normalization or sync actions
+- **THEN** it completes the message without normalization or scope resolution
 
 ### Requirement: Native queue message parsing
 The worker MUST deserialize inbound queue messages as JSON and identify the provider source from message structure. ADO messages MUST be identified when `eventType` is `AzureDevOpsAuditEvent` **or** `subject` is `AzureDevOps/Auditing`; the audit record MUST be extracted from `data`.

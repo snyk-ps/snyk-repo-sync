@@ -31,4 +31,4 @@
 
 ## 6. OpenSpec archive
 
-- [ ] 6.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/scope-mapping-config/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive scope-mapping-config` after review and merge
+- [x] 6.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/scope-mapping-config/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive scope-mapping-config` after review and merge

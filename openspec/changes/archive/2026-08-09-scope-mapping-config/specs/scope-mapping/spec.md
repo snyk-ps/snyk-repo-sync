@@ -29,13 +29,3 @@ Unmapped scopes MUST NOT dead-letter the message in this implementation slice.
 #### Scenario: Unmapped scope with default org
 - **WHEN** an ADO or GitHub event arrives for an unmapped scope name and `defaultSnykOrgId` is configured
 - **THEN** the worker uses the default Snyk organization for downstream Snyk actions
-
-## REMOVED Requirements
-
-### Requirement: Exclusion globs from scope mapping config
-**Reason**: Import exclusion globs are out of scope for scope mapping; operators configure exclusions in Snyk directly.
-**Migration**: Remove `exclusionGlobs` from operator `scopeMapping` entries.
-
-### Requirement: Deferred scope mapping implementation
-**Reason**: Config-based scope → Snyk org resolution and unmapped-scope logging are implemented in this change.
-**Migration**: Worker resolves scope mappings from operator config; Snyk API integration lookup remains specified but is implemented in the next change.
