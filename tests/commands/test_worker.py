@@ -48,6 +48,7 @@ def test_run_worker_starts_consumer(
     sync_state_cls,
     consumer_cls,
 ) -> None:
+    from config.scope_mapping import ScopeMappingSettings
     from config.settings import ServiceBusSettings, SyncStateSettings, WorkerSettings
 
     load_settings.return_value = WorkerSettings(
@@ -59,6 +60,7 @@ def test_run_worker_starts_consumer(
             storage_account_endpoint="https://example.table.core.windows.net",
             table_name="SnykSyncState",
         ),
+        scope_mapping=ScopeMappingSettings.empty(),
     )
     sync_state = sync_state_cls.return_value
     consumer = consumer_cls.return_value

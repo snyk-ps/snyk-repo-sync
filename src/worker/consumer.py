@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusReceivedMessage
 
+from config.scope_mapping import ScopeMappingSettings
 from config.settings import WorkerSettings
 from sync_state import SyncStateStore
 from worker.handler import handle_queue_message
@@ -72,16 +73,22 @@ def _message_body(message: ServiceBusReceivedMessage) -> bytes:
     return b"".join(body)
 
 
-def process_message(message: ServiceBusReceivedMessage, receiver: QueueReceiver) -> None:
+def process_message(
+    message: ServiceBusReceivedMessage,
+    receiver: QueueReceiver,
+    *,
+    scope_mapping: ScopeMappingSettings | None = None,
+) -> None:
     """Process one queue message: parse, complete, or dead-letter.
 
     Args:
         message: Received Service Bus message.
         receiver: Active queue receiver used for settlement.
+        scope_mapping: Optional scope mapping settings from operator config.
     """
     body = _message_body(message)
     try:
-        handle_queue_message(body)
+        handle_queue_message(body, scope_mapping=scope_mapping)
     except MessageParseError as exc:
         logger.warning("Dead-lettering message with invalid queue message: %s", exc)
         receiver.dead_letter_message(
@@ -138,4 +145,4 @@ class WorkerConsumer:
                 max_wait_time=self._max_wait_time,
             ) as receiver:
                 for message in receiver:
-                    process_message(message, receiver)
+                    process_message(message, receiver, scope_mapping=self._settings.scope_mapping)

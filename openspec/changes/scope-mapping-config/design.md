@@ -11,7 +11,6 @@ Operators previously used Table Storage `_meta` rows; that path was removed in s
 - Declarative ADO project name / GitHub org login → Snyk org id mapping in operator config.
 - Startup validation: required fields, non-empty ids, no duplicate lookup keys per source.
 - Runtime resolver usable by the worker and (later) Snyk sync logic.
-- Per-scope `exclusionGlobs` carried on the resolved mapping for downstream import (stored in config now; consumed by Snyk change later).
 - Unmapped scope: structured log, complete message (no Snyk side effects).
 
 **Non-Goals:**
@@ -38,7 +37,6 @@ Each **ADO** list item:
 | --- | -------- | ----------- |
 | `projectName` | Yes | ADO project name — MUST match audit `ProjectName` / normalized `ado.projectName` |
 | `snykOrgId` | Yes | Target Snyk organization id |
-| `exclusionGlobs` | No | Glob patterns for import exclusions (default `[]`) |
 
 Each **GitHub** list item:
 
@@ -46,7 +44,6 @@ Each **GitHub** list item:
 | --- | -------- | ----------- |
 | `orgName` | Yes | GitHub organization login |
 | `snykOrgId` | Yes | Target Snyk organization id |
-| `exclusionGlobs` | No | Glob patterns (default `[]`) |
 
 Example:
 
@@ -56,8 +53,6 @@ scopeMapping:
   ado:
     - projectName: Contoso-Platform
       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-      exclusionGlobs:
-        - "**/test/**"
   github:
     - orgName: contoso
       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
@@ -68,7 +63,6 @@ scopeMapping:
 - `scopeMapping` absent or empty → valid; resolver returns unmapped for all lookups unless `defaultSnykOrgId` is set.
 - Duplicate `projectName` (case-sensitive) or duplicate `orgName` → `ConfigError`.
 - Empty `snykOrgId` or empty lookup key → `ConfigError`.
-- `exclusionGlobs` MUST be a list of strings when present.
 
 **Alternative rejected:** Keyed maps (`ado.MyProject.snykOrgId`) — list entries with explicit names are clearer in operator docs and support duplicate detection with stable ordering.
 
@@ -81,7 +75,7 @@ Scope mappings are config-file only in v1. Unlike Service Bus endpoints, mapping
 Introduce `src/config/scope_mapping.py` (or adjacent module) with frozen dataclasses:
 
 - `ScopeMappingSettings` — parsed config section
-- `ResolvedScopeMapping` — `snyk_org_id`, `exclusion_globs`, `resolution` (`mapped` | `default`)
+- `ResolvedScopeMapping` — `snyk_org_id`, `resolution` (`mapped` | `default`)
 - `UnmappedScope` — `lookup_key`, `source`
 - `resolve_scope_mapping(mapping, *, source, lookup_key)` → union result
 
@@ -92,7 +86,7 @@ Lookup keys:
 | `ado` | `ado.project_name` |
 | `github` | org login (future; config entries validated at startup) |
 
-When explicit entry is missing and `defaultSnykOrgId` is set → return `ResolvedScopeMapping` with `resolution="default"` and empty `exclusionGlobs`.
+When explicit entry is missing and `defaultSnykOrgId` is set → return `ResolvedScopeMapping` with `resolution="default"`.
 
 ### Worker flow (slice 4)
 
@@ -103,7 +97,7 @@ flowchart TD
   B -->|ADO| D[Normalize lifecycle event]
   D --> E[Resolve scope by projectName]
   E --> F{Result?}
-  F -->|Mapped or default| G[Log snyk_org_id + exclusion_globs]
+  F -->|Mapped or default| G[Log snyk_org_id]
   F -->|Unmapped| H[Log unmapped scope warning]
   G --> I[Complete message]
   H --> I

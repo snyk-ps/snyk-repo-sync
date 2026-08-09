@@ -42,6 +42,61 @@ def test_load_worker_settings_success(tmp_path: Path) -> None:
     assert settings.service_bus.queue_name == "repo-sync-events"
     assert settings.sync_state.storage_account_endpoint == "https://example.table.core.windows.net"
     assert settings.sync_state.table_name == DEFAULT_TABLE_NAME
+    assert settings.scope_mapping.default_snyk_org_id is None
+    assert settings.scope_mapping.ado_by_project_name == {}
+
+
+def test_load_worker_settings_with_scope_mapping(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {
+            "serviceBus": {
+                "fullyQualifiedNamespace": "example.servicebus.windows.net",
+                "queueName": "repo-sync-events",
+            },
+            "syncState": {
+                "storageAccountEndpoint": "https://example.table.core.windows.net",
+            },
+            "scopeMapping": {
+                "defaultSnykOrgId": "default-org",
+                "ado": [
+                    {
+                        "projectName": "proj",
+                        "snykOrgId": "ado-org",
+                    },
+                ],
+            },
+        },
+    )
+
+    settings = load_worker_settings(path)
+
+    assert settings.scope_mapping.default_snyk_org_id == "default-org"
+    assert "proj" in settings.scope_mapping.ado_by_project_name
+
+
+def test_load_worker_settings_rejects_duplicate_scope_mapping(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {
+            "serviceBus": {
+                "fullyQualifiedNamespace": "example.servicebus.windows.net",
+                "queueName": "repo-sync-events",
+            },
+            "syncState": {
+                "storageAccountEndpoint": "https://example.table.core.windows.net",
+            },
+            "scopeMapping": {
+                "ado": [
+                    {"projectName": "dup", "snykOrgId": "org-1"},
+                    {"projectName": "dup", "snykOrgId": "org-2"},
+                ],
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError, match="Duplicate scopeMapping.ado projectName"):
+        load_worker_settings(path)
 
 
 def test_load_worker_settings_env_overrides_config(tmp_path: Path) -> None:

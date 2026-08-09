@@ -30,16 +30,11 @@ Unmapped scopes MUST NOT dead-letter the message in this implementation slice.
 - **WHEN** an ADO or GitHub event arrives for an unmapped scope name and `defaultSnykOrgId` is configured
 - **THEN** the worker uses the default Snyk organization for downstream Snyk actions
 
-### Requirement: Exclusion globs from scope mapping config
-Import exclusion globs for a scope MUST be sourced from operator config as part of scope mapping. `.snyk` file exclusions MUST NOT be used for this orchestration layer.
-
-Resolved mappings MUST expose `exclusionGlobs` from the matching config entry (empty list when unset).
-
-#### Scenario: Import with configured exclusions
-- **WHEN** a mapped repository is imported
-- **THEN** the import request includes `exclusionGlobs` from the scope mapping config entry
-
 ## REMOVED Requirements
+
+### Requirement: Exclusion globs from scope mapping config
+**Reason**: Import exclusion globs are out of scope for scope mapping; operators configure exclusions in Snyk directly.
+**Migration**: Remove `exclusionGlobs` from operator `scopeMapping` entries.
 
 ### Requirement: Deferred scope mapping implementation
 **Reason**: Config-based scope → Snyk org resolution and unmapped-scope logging are implemented in this change.

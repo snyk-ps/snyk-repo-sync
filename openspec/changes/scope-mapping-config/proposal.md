@@ -6,9 +6,9 @@ The `scope-mapping` capability spec already defines the contract; this change im
 
 ## What Changes
 
-- Extend operator config with a `scopeMapping` section: ADO project entries, GitHub org entries, optional `defaultSnykOrgId`, optional per-scope `exclusionGlobs`.
+- Extend operator config with a `scopeMapping` section: ADO project entries, GitHub org entries, optional `defaultSnykOrgId`.
 - Extend the config loader to parse and validate scope mappings at startup (duplicate keys fail fast).
-- Add a scope-mapping resolver: given `source` + scope lookup key (`ado.projectName` or GitHub org login), return `snykOrgId` and `exclusionGlobs`, or apply `defaultSnykOrgId` when configured.
+- Add a scope-mapping resolver: given `source` + scope lookup key (`ado.projectName` or GitHub org login), return `snykOrgId`, or apply `defaultSnykOrgId` when configured.
 - Wire ADO normalization path: after normalize, resolve mapping, log outcome (mapped / default / unmapped), complete message — no repository state access, no Snyk API calls.
 - GitHub queue messages remain completed without normalization (unchanged from slice 3); GitHub mapping entries are loaded and resolver-ready for when GitHub normalization lands.
 - Update `data/config.yaml.example`, **README.md**, **CONFIGURATION.md**, and cross-references in **CONTRIBUTING.md** / **INGESTION.md** where they still say mapping is deferred.

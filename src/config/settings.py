@@ -7,6 +7,9 @@ from pathlib import Path
 
 import yaml
 
+from config.errors import ConfigError
+from config.scope_mapping import ScopeMappingSettings, parse_scope_mapping
+
 DEFAULT_CONFIG_PATH = "data/config.yaml"
 DEFAULT_TABLE_NAME = "SnykSyncState"
 
@@ -14,10 +17,6 @@ SERVICEBUS_FQN_ENV = "SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
 SERVICEBUS_QUEUE_ENV = "SERVICEBUS_QUEUE_NAME"
 SYNC_STATE_ENDPOINT_ENV = "SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT"
 SYNC_STATE_TABLE_ENV = "SYNC_STATE_TABLE_NAME"
-
-
-class ConfigError(ValueError):
-    """Raised when operator configuration is missing or invalid."""
 
 
 @dataclass(frozen=True)
@@ -42,6 +41,7 @@ class WorkerSettings:
 
     service_bus: ServiceBusSettings
     sync_state: SyncStateSettings
+    scope_mapping: ScopeMappingSettings
 
 
 def _require_non_empty(value: object, label: str) -> str:
@@ -98,6 +98,7 @@ def load_worker_settings(
     table_name = env.get(SYNC_STATE_TABLE_ENV, sync_state_raw.get("tableName"))
 
     resolved_table_name = table_name.strip() if isinstance(table_name, str) and table_name.strip() else DEFAULT_TABLE_NAME
+    scope_mapping = parse_scope_mapping(raw.get("scopeMapping"))
 
     return WorkerSettings(
         service_bus=ServiceBusSettings(
@@ -117,4 +118,5 @@ def load_worker_settings(
             ),
             table_name=resolved_table_name,
         ),
+        scope_mapping=scope_mapping,
     )

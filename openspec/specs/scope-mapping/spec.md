@@ -37,13 +37,6 @@ When no config mapping exists for a scope name, the worker MUST log the failure.
 - **WHEN** an ADO or GitHub event arrives for an unmapped scope name and `defaultSnykOrgId` is configured
 - **THEN** the worker uses the default Snyk organization for downstream Snyk actions
 
-### Requirement: Exclusion globs from scope mapping config
-Import exclusion globs for a scope MUST be sourced from operator config as part of scope mapping. `.snyk` file exclusions MUST NOT be used for this orchestration layer.
-
-#### Scenario: Import with configured exclusions
-- **WHEN** a mapped repository is imported
-- **THEN** the import request includes `exclusionGlobs` from the scope mapping config entry
-
 ## Out of scope (this capability)
 
 Implementation of mapping resolution, Snyk API integration lookup, and unmapped-scope behavior is deferred to a follow-up change. Until then, the worker normalizes lifecycle events and completes messages without scope mapping or Snyk side effects.

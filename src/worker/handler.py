@@ -1,8 +1,14 @@
-"""Slice-3 message handling: parse and normalize ADO lifecycle events."""
+"""Slice-4 message handling: parse, normalize, and resolve scope mapping."""
 
 import logging
 from dataclasses import dataclass
 
+from config.scope_mapping import (
+    ResolvedScopeMapping,
+    ScopeMappingSettings,
+    UnmappedScope,
+    resolve_scope_mapping,
+)
 from worker.message import MessageParseError, QueueMessage, parse_queue_message
 from worker.normalize import NormalizationError, NormalizedEvent, normalize_ado_audit_record
 
@@ -15,24 +21,57 @@ class HandleResult:
 
     message: QueueMessage
     normalized: NormalizedEvent | None = None
+    scope_resolution: ResolvedScopeMapping | UnmappedScope | None = None
 
 
-def handle_queue_message(body: str | bytes) -> HandleResult:
+def _log_scope_resolution(
+    normalized: NormalizedEvent,
+    resolution: ResolvedScopeMapping | UnmappedScope,
+) -> None:
+    if isinstance(resolution, UnmappedScope):
+        logger.warning(
+            "Unmapped scope source=%s lookup_key=%s event_id=%s scope_id=%s",
+            resolution.source,
+            resolution.lookup_key,
+            normalized.event_id,
+            normalized.scope_id,
+        )
+        return
+
+    logger.info(
+        "Resolved scope mapping source=ado resolution=%s snyk_org_id=%s "
+        "event_id=%s scope_id=%s project_name=%s",
+        resolution.resolution,
+        resolution.snyk_org_id,
+        normalized.event_id,
+        normalized.scope_id,
+        normalized.ado.project_name,
+    )
+
+
+def handle_queue_message(
+    body: str | bytes,
+    *,
+    scope_mapping: ScopeMappingSettings | None = None,
+) -> HandleResult:
     """Parse a native queue message and normalize supported ADO lifecycle events.
 
     GitHub messages are parsed and passed through without normalization.
-    Scope mapping and Snyk side effects are intentionally omitted in this slice.
+    ADO messages resolve scope mapping from operator config; Snyk side effects
+    are intentionally omitted in this slice.
 
     Args:
         body: Raw queue message body.
+        scope_mapping: Optional scope mapping settings from operator config.
 
     Returns:
-        Parsed message and optional normalized event.
+        Parsed message, optional normalized event, and optional scope resolution.
 
     Raises:
         MessageParseError: If the message is malformed or unrecognized.
         NormalizationError: If ADO normalization fails.
     """
+    mapping = scope_mapping or ScopeMappingSettings.empty()
     message = parse_queue_message(body)
     logger.info(
         "Parsed queue message source=%s event_id=%s",
@@ -71,4 +110,16 @@ def handle_queue_message(body: str | bytes) -> HandleResult:
             normalized.repository.name,
             normalized.payload,
         )
-    return HandleResult(message=message, normalized=normalized)
+
+    resolution = resolve_scope_mapping(
+        mapping,
+        source="ado",
+        lookup_key=normalized.ado.project_name,
+    )
+    _log_scope_resolution(normalized, resolution)
+
+    return HandleResult(
+        message=message,
+        normalized=normalized,
+        scope_resolution=resolution,
+    )

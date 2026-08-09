@@ -14,7 +14,7 @@ GitHub queue messages MUST be completed without normalization or sync side effec
 
 #### Scenario: Valid ADO message with mapped project
 - **WHEN** the worker normalizes an ADO lifecycle message whose `ado.projectName` matches a config entry
-- **THEN** it logs the resolved `snykOrgId` and `exclusionGlobs`, then completes the message
+- **THEN** it logs the resolved `snykOrgId`, then completes the message
 
 #### Scenario: Valid ADO message with unmapped project
 - **WHEN** the worker normalizes an ADO lifecycle message whose `ado.projectName` has no config entry and no `defaultSnykOrgId` is configured

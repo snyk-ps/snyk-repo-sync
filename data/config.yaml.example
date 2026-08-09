@@ -9,3 +9,13 @@ serviceBus:
 syncState:
   storageAccountEndpoint: https://myaccount.table.core.windows.net
   # tableName: SnykSyncState
+
+# Optional: map ADO project names and GitHub org logins to Snyk organization ids.
+# scopeMapping:
+#   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"
+#   ado:
+#     - projectName: Contoso-Platform
+#       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+#   github:
+#     - orgName: contoso
+#       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"

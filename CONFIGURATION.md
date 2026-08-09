@@ -33,9 +33,50 @@ serviceBus:
 syncState:
   storageAccountEndpoint: https://myaccount.table.core.windows.net
   # tableName: SnykSyncState
+
+scopeMapping:
+  defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"  # optional
+  ado:
+    - projectName: Contoso-Platform
+      snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+  github:
+    - orgName: contoso
+      snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
 ```
 
-Individual settings MAY be overridden by environment variables; **env values take precedence** when set.
+Individual settings MAY be overridden by environment variables; **env values take precedence** when set. Scope mapping entries are **config-file only** (no env overrides in v1).
+
+### Scope mapping (`scopeMapping`)
+
+Maps provider scopes to Snyk organization ids. Integration ids are **not** stored in config — the worker resolves them via the Snyk API in a follow-up change.
+
+| Key | Required | Description |
+| --- | -------- | ----------- |
+| `defaultSnykOrgId` | No | Fallback Snyk org id when no explicit entry matches |
+| `ado` | No | List of ADO project mappings |
+| `github` | No | List of GitHub org mappings |
+
+Each **ADO** entry:
+
+| Key | Required | Description |
+| --- | -------- | ----------- |
+| `projectName` | Yes | ADO project name — MUST match audit `ProjectName` (case-sensitive) |
+| `snykOrgId` | Yes | Target Snyk organization id |
+
+Each **GitHub** entry:
+
+| Key | Required | Description |
+| --- | -------- | ----------- |
+| `orgName` | Yes | GitHub organization login (case-sensitive) |
+| `snykOrgId` | Yes | Target Snyk organization id |
+
+**Lookup keys:** ADO events use `ado.projectName` from the normalized audit record. GitHub entries are loaded at startup for when GitHub normalization lands; GitHub queue messages are not normalized yet.
+
+**Unmapped scopes:** When no entry matches and `defaultSnykOrgId` is unset, the worker logs a warning and completes the message (no dead-letter). Snyk side effects are deferred until the Snyk API change.
+
+Duplicate `projectName` or `orgName` values within a list cause startup failure.
+
+See **`openspec/specs/scope-mapping/spec.md`** for the full capability contract.
 
 ### Environment overrides
 
@@ -47,8 +88,6 @@ Individual settings MAY be overridden by environment variables; **env values tak
 | `SYNC_STATE_TABLE_NAME` | `syncState.tableName` |
 
 Future Snyk API settings (for example `SNYK_TOKEN`) remain environment secrets when Snyk sync is implemented.
-
-Scope-to-Snyk mapping (ADO project name / GitHub org name → Snyk org id) will be added to operator config in a follow-up change. See **`openspec/specs/scope-mapping/spec.md`**.
 
 The worker fails fast at startup when the config file is missing, invalid, or lacks required settings after the config/env merge.
 
@@ -77,7 +116,7 @@ uv run python src/main.py worker run --config /config/config.yaml
 
 | Command | Purpose |
 | ------- | ------- |
-| **`worker run`** | Long-running Service Bus consumer; normalizes ADO lifecycle events and completes messages (slice 3; scope mapping and Snyk sync deferred) |
+| **`worker run`** | Long-running Service Bus consumer; normalizes ADO lifecycle events, resolves scope mapping from config, and completes messages (Snyk API sync deferred) |
 | **`worker run --config PATH`** | Use a custom operator config file path |
 
 ## Sync-state table schema
@@ -89,7 +128,7 @@ Table name defaults to **`SnykSyncState`**. Repository state rows use:
 | `PartitionKey` | `{source}:{scopeId}` where `source` is `ado` or `github` |
 | `RowKey` | `{repositoryId}` |
 
-Scope-to-Snyk mapping is **not** stored in Table Storage — it will live in operator config per **`openspec/specs/scope-mapping/spec.md`**.
+Scope-to-Snyk mapping is **not** stored in Table Storage — it lives in the operator `scopeMapping` config section per **`openspec/specs/scope-mapping/spec.md`**.
 
 ### Repository row
 
@@ -132,7 +171,7 @@ See `openspec/specs/event-ingestion/spec.md` for the canonical contract. Step-by
 
 ## Normalized lifecycle event (ADO)
 
-After parsing, the worker maps supported ADO audit records into a normalized lifecycle event and completes the message. Scope mapping and repository state access are deferred to follow-up changes. GitHub messages are completed without normalization until a follow-up change.
+After parsing, the worker maps supported ADO audit records into a normalized lifecycle event, resolves scope mapping from config, and completes the message. Repository state access and Snyk API calls are deferred to follow-up changes. GitHub messages are completed without normalization until a follow-up change.
 
 | Field | ADO audit source | Description |
 | ----- | ---------------- | ----------- |
@@ -156,9 +195,10 @@ Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryR
 
 - Unparseable or unrecognized queue messages are **dead-lettered** with reason `InvalidMessage`.
 - ADO audit records that are unsupported or missing required fields are **dead-lettered** with reason `InvalidNormalization`.
-- Valid ADO messages are **normalized and completed** without scope mapping, repository state access, or Snyk side effects in the current slice.
+- Valid ADO messages are **normalized**, **scope-mapped** (when configured), and **completed** without repository state access or Snyk API side effects in the current slice.
+- Unmapped ADO project names (no config entry and no `defaultSnykOrgId`) log a **warning** and still complete the message.
 - Valid GitHub messages are **completed** without normalization or sync side effects until GitHub normalization is implemented.
-- Logs include parsed source, normalized lifecycle fields for ADO, and queue name.
+- Logs include parsed source, normalized lifecycle fields for ADO, scope mapping outcome, and queue name.
 - Azure SDK connection/link chatter is logged at **WARNING** and above only; application loggers remain at **INFO**.
 
 ## Integration tests

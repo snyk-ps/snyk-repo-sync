@@ -2,7 +2,7 @@
 
 Queue-driven worker that consumes repository lifecycle events from Azure Service Bus and syncs Snyk targets for Azure DevOps and GitHub repositories.
 
-External systems (ADO audit stream via Event Grid, GitHub webhooks) publish native JSON to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice parses queue messages, normalizes ADO audit lifecycle events, ensures the sync-state table exists, and completes messages; scope mapping, repository state writes, and Snyk sync follow in subsequent changes.
+External systems (ADO audit stream via Event Grid, GitHub webhooks) publish native JSON to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice parses queue messages, normalizes ADO audit lifecycle events, resolves scope-to-Snyk org mapping from operator config, ensures the sync-state table exists, and completes messages; repository state writes and Snyk API sync follow in subsequent changes.
 
 **Operators:** queue and ingress setup (Service Bus, ADO audit stream, GitHub webhooks) are documented in **[INGESTION.md](INGESTION.md)**. ADO audit events are batched and typically arrive within ~30 minutes.
 
@@ -39,7 +39,7 @@ uv sync --dev
 cp data/config.yaml.example data/config.yaml
 ```
 
-Edit `data/config.yaml` with your Service Bus namespace, queue name, and Table Storage endpoint. Authenticate with `az login` (or a service principal with the RBAC roles listed in **[CONFIGURATION.md](CONFIGURATION.md)**).
+Edit `data/config.yaml` with your Service Bus namespace, queue name, Table Storage endpoint, and optional `scopeMapping` entries. Authenticate with `az login` (or a service principal with the RBAC roles listed in **[CONFIGURATION.md](CONFIGURATION.md)**).
 
 3. **Verify** the install:
 
@@ -72,6 +72,9 @@ The worker loads **`data/config.yaml`** by default (or **`/config/config.yaml`**
 | Service Bus queue | `serviceBus.queueName` | `SERVICEBUS_QUEUE_NAME` |
 | Table Storage endpoint | `syncState.storageAccountEndpoint` | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT` |
 | Table name | `syncState.tableName` | `SYNC_STATE_TABLE_NAME` |
+| Scope mapping | `scopeMapping` | — (config file only) |
+
+See **[CONFIGURATION.md](CONFIGURATION.md)** for the full `scopeMapping` schema.
 
 ## Usage
 
@@ -96,9 +99,9 @@ uv run python src/main.py worker run --config data/config.yaml
 - Consumes native queue messages from a pre-provisioned Service Bus queue (Event Grid JSON for ADO; raw webhook JSON for GitHub)
 - Authenticates with `DefaultAzureCredential` and Azure RBAC (no connection strings)
 - Parses provider-native message shapes and normalizes ADO audit lifecycle events into a provider-neutral model
+- Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `defaultSnykOrgId`)
 - Ensures the sync-state table exists on startup (repository rows written in a follow-up change)
-- Scope-to-Snyk mapping via operator config is specified in **`openspec/specs/scope-mapping/spec.md`** (implementation deferred)
-- Passes GitHub messages through without normalization (GitHub mapper deferred); Snyk sync deferred
+- Passes GitHub messages through without normalization (GitHub mapper deferred); Snyk API sync deferred
 
 ## Testing
 
@@ -125,6 +128,7 @@ Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)**
 | Integration tests skipped | Config file missing or invalid |
 | Messages dead-lettered with `InvalidMessage` | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON |
 | Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId` |
+| Log warnings for unmapped ADO project | Add a `scopeMapping.ado` entry for the project name or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 
 ## Deployment
 
@@ -138,6 +142,6 @@ The Docker image entrypoint is `python src/main.py worker run --config /config/c
 | -------- | -------- |
 | **[INGESTION.md](INGESTION.md)** | Service Bus, ADO audit stream, and GitHub webhook ingress setup |
 | **[CONFIGURATION.md](CONFIGURATION.md)** | Operator config, RBAC, table schema, CLI commands |
-| **[openspec/specs/scope-mapping/spec.md](openspec/specs/scope-mapping/spec.md)** | Scope-to-Snyk mapping (upcoming) |
+| **[openspec/specs/scope-mapping/spec.md](openspec/specs/scope-mapping/spec.md)** | Scope-to-Snyk mapping contract |
 | **[CONTRIBUTING.md](CONTRIBUTING.md)** | Project layout, OpenSpec workflow, tests, CI/Docker |
 | **[openspec/SPEC.md](openspec/SPEC.md)** | Capability specifications |
