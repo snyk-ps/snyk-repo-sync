@@ -2,11 +2,11 @@
 
 Operator reference for worker configuration, CLI commands, and sync-state schema. For installation, usage, and deployment, see the [README](README.md). For Service Bus provisioning and ADO audit stream / GitHub webhook ingress setup, see **[INGESTION.md](INGESTION.md)**. For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
-The worker authenticates to Azure with **`DefaultAzureCredential`** (managed identity in production; `az login` or a service principal locally). Connection strings and shared access keys are **not supported**.
+The worker authenticates to Azure with `DefaultAzureCredential` (managed identity in production; `az login` or a service principal locally). Connection strings and shared access keys are **not supported**.
 
 ## Operator config file
 
-The worker loads a YAML config file via `--config` (default **`data/config.yaml`**). In production, mount the file at **`/config/config.yaml`** (Azure Files).
+The worker loads a YAML config file via `--config` (default `data/config.yaml`). In production, mount the file at `/config/config.yaml` (Azure Files).
 
 Copy the example to get started locally:
 
@@ -14,16 +14,20 @@ Copy the example to get started locally:
 cp data/config.yaml.example data/config.yaml
 ```
 
+
+
 ### Config schema
 
-| Key | Required | Default | Description |
-| --- | -------- | ------- | ----------- |
-| `serviceBus.fullyQualifiedNamespace` | Yes | — | Service Bus namespace FQDN, e.g. `mynamespace.servicebus.windows.net` |
-| `serviceBus.queueName` | Yes | — | Pre-provisioned queue name |
-| `syncState.storageAccountEndpoint` | Yes | — | Table service URL, e.g. `https://myaccount.table.core.windows.net` |
-| `syncState.tableName` | No | `SnykSyncState` | Sync-state table name |
-| `ado.organization` | Yes | — | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
-| `ado.host` | No | `dev.azure.com` | ADO host; use for Azure DevOps Server when not hosted on `dev.azure.com` |
+
+| Key                                  | Required | Default         | Description                                                                                             |
+| ------------------------------------ | -------- | --------------- | ------------------------------------------------------------------------------------------------------- |
+| `serviceBus.fullyQualifiedNamespace` | Yes      | —               | Service Bus namespace FQDN, e.g. `mynamespace.servicebus.windows.net`                                   |
+| `serviceBus.queueName`               | Yes      | —               | Pre-provisioned queue name                                                                              |
+| `syncState.storageAccountEndpoint`   | Yes      | —               | Table service URL, e.g. `https://myaccount.table.core.windows.net`                                      |
+| `syncState.tableName`                | No       | `SnykSyncState` | Sync-state table name                                                                                   |
+| `ado.organization`                   | Yes      | —               | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
+| `ado.host`                           | No       | `dev.azure.com` | ADO host; use for Azure DevOps Server when not hosted on `dev.azure.com`                                |
+
 
 Example:
 
@@ -55,32 +59,36 @@ Individual settings MAY be overridden by environment variables; **env values tak
 
 Maps provider scopes to Snyk organization ids. Top-level keys under `scopeMapping` (other than `defaultSnykOrgId`) MUST be Snyk integration types. Optional `snykIntegrationId` per entry skips integration list API calls; when omitted the worker resolves integration ids via the Snyk API and caches them in process memory.
 
-| Key | Required | Description |
-| --- | -------- | ----------- |
-| `defaultSnykOrgId` | No | Fallback Snyk org id when no explicit entry matches |
-| `azure-repos` | No | List of ADO project mappings (Snyk integration type `azure-repos`) |
-| `github` | No | List of GitHub org mappings for Snyk integration type `github` |
-| `github-cloud` | No | GitHub org mappings for Snyk integration type `github-cloud` |
-| `github-server` | No | GitHub org mappings for Snyk integration type `github-server` |
-| `github-enterprise` | No | GitHub org mappings for Snyk integration type `github-enterprise` |
 
-Legacy key `ado` is rejected at startup. Use integration type keys instead.
+| Key                 | Required | Description                                                        |
+| ------------------- | -------- | ------------------------------------------------------------------ |
+| `defaultSnykOrgId`  | No       | Fallback Snyk org id when no explicit entry matches                |
+| `azure-repos`       | No       | List of ADO project mappings (Snyk integration type `azure-repos`) |
+| `github`            | No       | List of GitHub org mappings for Snyk integration type `github`     |
+| `github-cloud`      | No       | GitHub org mappings for Snyk integration type `github-cloud`       |
+| `github-server`     | No       | GitHub org mappings for Snyk integration type `github-server`      |
+| `github-enterprise` | No       | GitHub org mappings for Snyk integration type `github-enterprise`  |
 
-Each **`azure-repos`** entry (ADO):
 
-| Key | Required | Description |
-| --- | -------- | ----------- |
-| `projectName` | Yes | ADO project name — MUST match audit `ProjectName` (case-sensitive) |
-| `snykOrgId` | Yes | Target Snyk organization id |
-| `snykIntegrationId` | No | Integration id — optional; resolved via API when omitted |
+Each `azure-repos` entry (ADO):
+
+
+| Key                 | Required | Description                                                        |
+| ------------------- | -------- | ------------------------------------------------------------------ |
+| `projectName`       | Yes      | ADO project name — MUST match audit `ProjectName` (case-sensitive) |
+| `snykOrgId`         | Yes      | Target Snyk organization id                                        |
+| `snykIntegrationId` | No       | Integration id — optional; resolved via API when omitted           |
+
 
 Each **GitHub integration type** entry (`github`, `github-cloud`, `github-server`, `github-enterprise`):
 
-| Key | Required | Description |
-| --- | -------- | ----------- |
-| `orgName` | Yes | GitHub organization login (case-sensitive) |
-| `snykOrgId` | Yes | Target Snyk organization id |
-| `snykIntegrationId` | No | Integration id — optional; resolved via API when omitted |
+
+| Key                 | Required | Description                                              |
+| ------------------- | -------- | -------------------------------------------------------- |
+| `orgName`           | Yes      | GitHub organization login (case-sensitive)               |
+| `snykOrgId`         | Yes      | Target Snyk organization id                              |
+| `snykIntegrationId` | No       | Integration id — optional; resolved via API when omitted |
+
 
 The integration type for API lookup is determined by the section key (for example `github-enterprise`), not a per-entry field.
 
@@ -92,16 +100,18 @@ When using `defaultSnykOrgId` without an explicit scope entry, the worker uses `
 
 Duplicate `projectName` or `orgName` values within a list cause startup failure.
 
-See **`openspec/specs/scope-mapping/spec.md`** for the full capability contract.
+See `openspec/specs/scope-mapping/spec.md` for the full capability contract.
 
 ### Snyk settings (`snyk`)
 
-| Key | Required | Default | Description |
-| --- | -------- | ------- | ----------- |
-| `maxConcurrentPendingImports` | No | `100` | Max repository rows with `importStatus=pending` before deferring new imports (per worker process) |
-| `targetRemoval.onRename` | No | `deactivate` | `deactivate` or `delete` for old target on rename |
-| `targetRemoval.onDefaultBranchChange` | No | `deactivate` | `deactivate` or `delete` for old target on default branch change |
-| `targetRemoval.onRepoDelete` | No | `deactivate` | `deactivate` or `delete` when provider repo is deleted |
+
+| Key                                   | Required | Default      | Description                                                                                       |
+| ------------------------------------- | -------- | ------------ | ------------------------------------------------------------------------------------------------- |
+| `maxConcurrentPendingImports`         | No       | `100`        | Max repository rows with `importStatus=pending` before deferring new imports (per worker process) |
+| `targetRemoval.onRename`              | No       | `deactivate` | `deactivate` or `delete` for old target on rename                                                 |
+| `targetRemoval.onDefaultBranchChange` | No       | `deactivate` | `deactivate` or `delete` for old target on default branch change                                  |
+| `targetRemoval.onRepoDelete`          | No       | `deactivate` | `deactivate` or `delete` when provider repo is deleted                                            |
+
 
 `delete` is irreversible. Default is `deactivate` for all three.
 
@@ -115,19 +125,23 @@ Project tagging (`tagApplied=true`) is deferred to a follow-up change; import jo
 
 ### Environment overrides
 
-| Variable | Overrides |
-| -------- | --------- |
-| `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | `serviceBus.fullyQualifiedNamespace` |
-| `SERVICEBUS_QUEUE_NAME` | `serviceBus.queueName` |
-| `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT` | `syncState.storageAccountEndpoint` |
-| `SYNC_STATE_TABLE_NAME` | `syncState.tableName` |
 
-| Variable | Required | Description |
-| -------- | -------- | ----------- |
-| `SNYK_TOKEN` | Yes | Snyk API token for import, target removal, and integration lookup (secret; never commit) |
-| `ADO_PAT` | Yes | Azure DevOps PAT for Git REST enrichment when lifecycle events omit default branch (secret; never commit) |
-| `ADO_ORGANIZATION` | No | Overrides `ado.organization` from config |
-| `ADO_HOST` | No | Overrides `ado.host` from config |
+| Variable                               | Overrides                            |
+| -------------------------------------- | ------------------------------------ |
+| `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | `serviceBus.fullyQualifiedNamespace` |
+| `SERVICEBUS_QUEUE_NAME`                | `serviceBus.queueName`               |
+| `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT`  | `syncState.storageAccountEndpoint`   |
+| `SYNC_STATE_TABLE_NAME`                | `syncState.tableName`                |
+
+
+
+| Variable           | Required | Description                                                                                               |
+| ------------------ | -------- | --------------------------------------------------------------------------------------------------------- |
+| `SNYK_TOKEN`       | Yes      | Snyk API token for import, target removal, and integration lookup (secret; never commit)                  |
+| `ADO_PAT`          | Yes      | Azure DevOps PAT for Git REST enrichment when lifecycle events omit default branch (secret; never commit) |
+| `ADO_ORGANIZATION` | No       | Overrides `ado.organization` from config                                                                  |
+| `ADO_HOST`         | No       | Overrides `ado.host` from config                                                                          |
+
 
 The worker fails fast at startup when the config file is missing, invalid, lacks required settings after the config/env merge, or when `SNYK_TOKEN` or `ADO_PAT` is unset.
 
@@ -139,11 +153,13 @@ The worker fails fast at startup when the config file is missing, invalid, lacks
 
 Configure the PAT with the minimum scopes below. Store it in Key Vault or container secrets; never commit it.
 
-| Setting | Requirement |
-| ------- | ----------- |
-| **Scope** | **Code (Read)** — Azure DevOps PAT scope name `Code` → **Read** |
-| **Organization** | Access to the organization named in `ado.organization` |
-| **Projects** | If the PAT is limited to specific projects, include every ADO project listed in `scopeMapping.azure-repos` (and any project you expect lifecycle events from when using `defaultSnykOrgId`) |
+
+| Setting          | Requirement                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Scope**        | **Code (Read)** — Azure DevOps PAT scope name `Code` → **Read**                                                                                                                             |
+| **Organization** | Access to the organization named in `ado.organization`                                                                                                                                      |
+| **Projects**     | If the PAT is limited to specific projects, include every ADO project listed in `scopeMapping.azure-repos` (and any project you expect lifecycle events from when using `defaultSnykOrgId`) |
+
 
 Scopes **not** required for this worker: Build, Release, Work Items, Packaging, Test Management, or other write/admin permissions.
 
@@ -155,10 +171,12 @@ See [Use personal access tokens](https://learn.microsoft.com/en-us/azure/devops/
 
 Assign these built-in roles to the Container App managed identity (production) or local dev principal (`az login` / service principal):
 
-| Role | Role ID | Scope | Purpose |
-| ---- | ------- | ----- | ------- |
-| **Azure Service Bus Data Owner** | `090c5cfd-121d-4293-81b3-1665f843147` | Namespace or queue | Receive, settle, and send queue messages (data plane) |
+
+| Role                               | Role ID                                | Scope                    | Purpose                                                 |
+| ---------------------------------- | -------------------------------------- | ------------------------ | ------------------------------------------------------- |
+| **Azure Service Bus Data Owner**   | `090c5cfd-121d-4293-81b3-1665f843147`  | Namespace or queue       | Receive, settle, and send queue messages (data plane)   |
 | **Storage Table Data Contributor** | `0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3` | Storage account or table | Create sync-state table if missing; read/write entities |
+
 
 Least-privilege alternative for Service Bus: **Azure Service Bus Data Receiver** + **Azure Service Bus Data Sender** on the queue scope.
 
@@ -166,7 +184,7 @@ The worker does **not** create Service Bus queues or namespaces. It **does** cal
 
 ## CLI commands
 
-Entry point: **`src/main.py`**
+Entry point: `src/main.py`
 
 ```bash
 uv run python src/main.py --help
@@ -174,37 +192,45 @@ uv run python src/main.py worker run
 uv run python src/main.py worker run --config /config/config.yaml
 ```
 
-| Command | Purpose |
-| ------- | ------- |
-| **`worker run`** | Long-running Service Bus consumer; normalizes ADO lifecycle events, syncs mapped repos via Snyk (async import jobs), and schedules internal follow-up messages on the same queue |
-| **`worker run --config PATH`** | Use a custom operator config file path |
+
+| Command                    | Purpose                                                                                                                                                                          |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `worker run`               | Long-running Service Bus consumer; normalizes ADO lifecycle events, syncs mapped repos via Snyk (async import jobs), and schedules internal follow-up messages on the same queue |
+| `worker run --config PATH` | Use a custom operator config file path                                                                                                                                           |
+
+
+
 
 ## Sync-state table schema
 
-Table name defaults to **`SnykSyncState`**. Repository state rows use:
+Table name defaults to `SnykSyncState`. Repository state rows use:
 
-| Key | Value |
-| --- | ----- |
+
+| Key            | Value                                                    |
+| -------------- | -------------------------------------------------------- |
 | `PartitionKey` | `{source}:{scopeId}` where `source` is `ado` or `github` |
-| `RowKey` | `{repositoryId}` |
+| `RowKey`       | `{repositoryId}`                                         |
 
-Scope-to-Snyk mapping is **not** stored in Table Storage — it lives in the operator `scopeMapping` config section per **`openspec/specs/scope-mapping/spec.md`**.
+
+Scope-to-Snyk mapping is **not** stored in Table Storage — it lives in the operator `scopeMapping` config section per `openspec/specs/scope-mapping/spec.md`.
 
 ### Repository row
 
 `PartitionKey={source}:{scopeId}`, `RowKey={repositoryId}`
 
-| Property | Type | Description |
-| -------- | ---- | ----------- |
-| `repoName` | string | Current repository name |
-| `snykTargetId` | string | Snyk target id |
-| `defaultBranch` | string | Default branch name |
-| `status` | string | Sync status |
-| `desiredStateHash` | string | Idempotency hash |
-| `lastEventId` | string | Last processed provider event id |
-| `tagApplied` | boolean | Repository id tag applied (`false` until tagging change lands) |
-| `importJobId` | string | Last Snyk import job id (retained after success for audit) |
-| `importStatus` | string | `pending`, `failed`, or `complete` |
+
+| Property           | Type    | Description                                                    |
+| ------------------ | ------- | -------------------------------------------------------------- |
+| `repoName`         | string  | Current repository name                                        |
+| `snykTargetId`     | string  | Snyk target id                                                 |
+| `defaultBranch`    | string  | Default branch name                                            |
+| `status`           | string  | Sync status                                                    |
+| `desiredStateHash` | string  | Idempotency hash                                               |
+| `lastEventId`      | string  | Last processed provider event id                               |
+| `tagApplied`       | boolean | Repository id tag applied (`false` until tagging change lands) |
+| `importJobId`      | string  | Last Snyk import job id (retained after success for audit)     |
+| `importStatus`     | string  | `pending`, `failed`, or `complete`                             |
+
 
 Repository rows are written when import starts (`pending`) and updated when import completes. The table is created on worker startup when missing.
 
@@ -212,12 +238,14 @@ Repository rows are written when import starts (`pending`) and updated when impo
 
 Snyk import payloads **require** a `branch` value. When the normalized lifecycle event includes `defaultBranch` (for example `repo.created` with audit `DefaultBranch`, or `repo.default_branch_changed`), that value is used. Otherwise the worker calls the ADO Git REST API (`GET .../_apis/git/repositories/{repositoryId}`) with `ADO_PAT` to resolve the repository default branch before starting import. Sync-state `defaultBranch` is set to the branch used for import, including values resolved via ADO REST.
 
-| Event | Actions |
-| ----- | ------- |
-| **repo.created** | Resolve import branch → start Snyk import → schedule `import_poll` follow-ups until job completes |
-| **repo.renamed** | Resolve old target id → remove old target per `targetRemoval.onRename` (must succeed) → resolve import branch → import new name → poll until job complete and target id resolved |
-| **repo.default_branch_changed** | No action if no prior default branch; else resolve old target id → remove old target → import on new default branch → poll |
-| **repo.deleted** | Resolve target id → remove per `targetRemoval.onRepoDelete`; mark state inactive (DLQ if removal fails) |
+
+| Event                           | Actions                                                                                                                                                                          |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **repo.created**                | Resolve import branch → start Snyk import → schedule `import_poll` follow-ups until job completes                                                                                |
+| **repo.renamed**                | Resolve old target id → remove old target per `targetRemoval.onRename` (must succeed) → resolve import branch → import new name → poll until job complete and target id resolved |
+| **repo.default_branch_changed** | No action if no prior default branch; else resolve old target id → remove old target → import on new default branch → poll                                                       |
+| **repo.deleted**                | Resolve target id → remove per `targetRemoval.onRepoDelete`; mark state inactive (DLQ if removal fails)                                                                          |
+
 
 A repository is synced when `importStatus=complete` and `snykTargetId` is set (via REST target lookup after import when not present in state). Project tagging is deferred.
 
@@ -229,10 +257,12 @@ Queue message bodies are provider-native JSON or internal worker follow-up envel
 
 Used for async import polling and deferred lifecycle retries. Distinguished by top-level `syncPhase`:
 
-| `syncPhase` | Purpose |
-| ----------- | ------- |
-| `import_poll` | Poll Snyk import job status |
+
+| `syncPhase`          | Purpose                                                   |
+| -------------------- | --------------------------------------------------------- |
+| `import_poll`        | Poll Snyk import job status                               |
 | `lifecycle_deferred` | Retry lifecycle work when pending import limit is reached |
+
 
 Import poll follow-ups dead-letter with reason `ImportJobFailed` after 5 retries with exponential backoff.
 
@@ -240,12 +270,14 @@ Import poll follow-ups dead-letter with reason `ImportJobFailed` after 5 retries
 
 Event Grid JSON with audit record under `data`. The worker detects ADO when `eventType == "AzureDevOpsAuditEvent"` **or** `subject == "AzureDevOps/Auditing"`.
 
-| Field | Description |
-| ----- | ----------- |
-| `eventType` / `subject` | ADO message detection |
-| `data` | Audit record passed to normalization |
-| `data.Id` | Event id |
-| `data.ActionId` | Lifecycle action (`Git.RepositoryCreated`, etc.) |
+
+| Field                   | Description                                      |
+| ----------------------- | ------------------------------------------------ |
+| `eventType` / `subject` | ADO message detection                            |
+| `data`                  | Audit record passed to normalization             |
+| `data.Id`               | Event id                                         |
+| `data.ActionId`         | Lifecycle action (`Git.RepositoryCreated`, etc.) |
+
 
 See `data/fixtures/eventgrid_ado_*.json` and **[INGESTION.md](INGESTION.md)**.
 
@@ -259,21 +291,23 @@ See `openspec/specs/event-ingestion/spec.md` for the canonical contract. Step-by
 
 After parsing, the worker maps supported ADO audit records into a normalized lifecycle event, resolves scope mapping, performs Snyk lifecycle sync for mapped scopes, and completes or schedules follow-up messages. GitHub messages are completed without normalization until a follow-up change.
 
-| Field | ADO audit source | Description |
-| ----- | ---------------- | ----------- |
-| `eventId` | `Id` | Stable audit event id |
-| `eventType` | `ActionId` | `repo.created`, `repo.renamed`, `repo.deleted`, or `repo.default_branch_changed` |
-| `scopeId` | `ProjectId` | ADO project id (sync-state partition key) |
-| `repositoryId` | `Data.RepoId` | Repository id |
-| `occurredAt` | `Timestamp` | Event time |
-| `ado.orgId` | `ScopeId` | ADO organization id |
-| `ado.orgDisplayName` | `ScopeDisplayName` | Organization display name |
-| `ado.projectId` | `ProjectId` | Same as `scopeId` |
-| `ado.projectName` | `ProjectName` | Project name |
-| `repository.name` | `Data.RepoName` | Repository name |
-| `payload.defaultBranch` | `Data.DefaultBranch` | Optional on create; required on default-branch change (`refs/heads/` stripped) |
+
+| Field                           | ADO audit source             | Description                                                                          |
+| ------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------ |
+| `eventId`                       | `Id`                         | Stable audit event id                                                                |
+| `eventType`                     | `ActionId`                   | `repo.created`, `repo.renamed`, `repo.deleted`, or `repo.default_branch_changed`     |
+| `scopeId`                       | `ProjectId`                  | ADO project id (sync-state partition key)                                            |
+| `repositoryId`                  | `Data.RepoId`                | Repository id                                                                        |
+| `occurredAt`                    | `Timestamp`                  | Event time                                                                           |
+| `ado.orgId`                     | `ScopeId`                    | ADO organization id                                                                  |
+| `ado.orgDisplayName`            | `ScopeDisplayName`           | Organization display name                                                            |
+| `ado.projectId`                 | `ProjectId`                  | Same as `scopeId`                                                                    |
+| `ado.projectName`               | `ProjectName`                | Project name                                                                         |
+| `repository.name`               | `Data.RepoName`              | Repository name                                                                      |
+| `payload.defaultBranch`         | `Data.DefaultBranch`         | Optional on create; required on default-branch change (`refs/heads/` stripped)       |
 | `payload.previousDefaultBranch` | `Data.PreviousDefaultBranch` | Present when ADO reports a prior default branch; omitted when empty (no sync action) |
-| `payload.previousRepoName` | `Data.PreviousRepoName` | Required on rename |
+| `payload.previousRepoName`      | `Data.PreviousRepoName`      | Required on rename                                                                   |
+
 
 Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryRenamed`, `Git.RepositoryDeleted`, `Git.RepositoryDefaultBranchChanged`.
 
@@ -288,6 +322,8 @@ Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryR
 - Logs include parsed source, normalized lifecycle fields for ADO, scope mapping outcome, and queue name.
 - Azure SDK connection/link chatter is logged at **WARNING** and above only; application loggers remain at **INFO**.
 
+
+
 ## Integration tests
 
 Integration tests require a worker config file and Azure credentials (`az login` or service principal with required RBAC). See **[CONTRIBUTING.md § Integration tests](CONTRIBUTING.md#integration-tests)**.
@@ -298,3 +334,4 @@ cp data/config.yaml.example data/config.yaml
 az login
 uv run pytest -m integration
 ```
+
