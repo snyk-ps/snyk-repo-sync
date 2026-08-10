@@ -1,6 +1,6 @@
 # Contributing
 
-This document is for people who create an application from this template or change code in this repository. End users and operators should start with the [README](README.md): **[Installation and setup](README.md#installation-and-setup)** for local use, and **[Deployment](README.md#deployment)** for production containers.
+This document is for people who create an application from this template or change code in this repository. End users and operators should start with the [README](README.md): **[Installation and setup](README.md#installation-and-setup)** for local use, and **[Deployment](README.md#deployment)** for the Azure Container App runbook (portal steps live in README, not here).
 
 ## Using this template
 
@@ -135,7 +135,7 @@ This repo uses **OpenSpec** for spec-driven changes:
 
 ## CI, releases, and containers
 
-**`.github/workflows/`** wires releases and container publishing. Adjust or remove workflows if your process differs.
+**`.github/workflows/`** wires releases and container publishing. Adjust or remove workflows if your process differs. **Azure Container App deployment** (identity, config mount, secrets, scaling) is documented in **[README § Deployment](README.md#deployment)** — this section covers Dockerfile and CI only.
 
 **Template marker:** The file `.github/template` exists in this repository so **GitHub Actions do not run** Release Please or Docker publish here. That avoids versioning this project as a shipped template artifact. When someone creates **an application** from the template, they delete `.github/template`, add `VERSION` at the repo root (single semver line), and workflows then run as usual.
 

@@ -2,7 +2,7 @@
 
 Operator guide for provisioning **customer-owned queue infrastructure** and **event ingress** that delivers repository lifecycle events to the shared Service Bus queue. The worker in this repository only **consumes** that queue; it does not create Service Bus resources or Event Grid topics.
 
-For worker configuration (operator config file, RBAC, queue message shapes), see **[CONFIGURATION.md](CONFIGURATION.md)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
+For worker configuration (operator config file, RBAC, queue message shapes), see **[CONFIGURATION.md](CONFIGURATION.md)**. After queue and ingress are ready, deploy the worker per **[README § Deployment](README.md#deployment)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
 
 ## Architecture
 
@@ -99,7 +99,7 @@ The worker uses **`DefaultAzureCredential`** and operator config — not Service
 | **Azure Service Bus Data Owner** | Service Bus namespace or queue |
 | **Storage Table Data Contributor** | Storage account |
 
-Mount operator config at `/config/config.yaml` with `serviceBus.fullyQualifiedNamespace`, `serviceBus.queueName`, and `syncState.storageAccountEndpoint`. See **[CONFIGURATION.md](CONFIGURATION.md)**.
+Mount operator config at `/config/config.yaml` with `serviceBus.fullyQualifiedNamespace`, `serviceBus.queueName`, and `syncState.storageAccountEndpoint`. See **[CONFIGURATION.md](CONFIGURATION.md)**. Deploy the worker Container App after ingress is live — **[README § Deployment](README.md#deployment)**.
 
 Local development: `az login` with the same RBAC roles on your dev namespace and storage account.
 

@@ -1,6 +1,6 @@
 # Configuration reference
 
-Operator reference for worker configuration, CLI commands, and sync-state schema. For installation, usage, and deployment, see the [README](README.md). For Service Bus provisioning and ADO audit stream / GitHub webhook ingress setup, see **[INGESTION.md](INGESTION.md)**. For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+Operator reference for worker configuration, CLI commands, and sync-state schema. For installation, usage, and **[Azure Container App deployment](README.md#deployment)**, see the [README](README.md). For Service Bus provisioning and ADO audit stream / GitHub webhook ingress setup, see **[INGESTION.md](INGESTION.md)**. For layout, tests, OpenSpec, and CI/Docker details, see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
 The worker authenticates to Azure with `DefaultAzureCredential` (managed identity in production; `az login` or a service principal locally). Connection strings and shared access keys are **not supported**.
 
@@ -169,7 +169,7 @@ See [Use personal access tokens](https://learn.microsoft.com/en-us/azure/devops/
 
 ## RBAC
 
-Assign these built-in roles to the Container App managed identity (production) or local dev principal (`az login` / service principal):
+Assign these built-in roles to the Container App managed identity (production) or local dev principal (`az login` / service principal). Portal walkthrough for identity assignment: **[README § Deployment](README.md#f-managed-identity-and-rbac)**.
 
 
 | Role                               | Role ID                                | Scope                    | Purpose                                                 |
