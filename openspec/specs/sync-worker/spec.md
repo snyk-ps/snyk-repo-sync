@@ -3,9 +3,7 @@
 Queue-driven worker that normalizes provider events, validates state, routes repo lifecycle events by source, enforces idempotency, and handles retries and dead-lettering. Event normalization is owned by the worker application in this repository so lifecycle mapping ships with worker releases rather than customer-owned ingress infrastructure.
 
 Scope-to-Snyk resolution is owned by the `scope-mapping` capability (operator config + Snyk API), not Table Storage `_meta` rows.
-
 ## Requirements
-
 ### Requirement: Queue-driven processing
 The worker MUST consume messages from the Service Bus queue on demand; it MUST NOT rely on always-on polling of ADO, GitHub, or Snyk as its primary trigger.
 
@@ -99,15 +97,21 @@ Branch values in `payload` MUST NOT include the `refs/heads/` prefix.
 - **THEN** it completes the message without normalization or sync side effects
 
 ### Requirement: Source-aware processing flow
-For each normalized event, the worker MUST: resolve scope mapping per the `scope-mapping` capability; read repository state from sync state (if applicable); perform idempotency check; execute the mapped action; update repository state; complete or dead-letter the message.
+For each normalized event, the worker MUST: resolve scope mapping per the `scope-mapping` capability; read repository state from sync state; perform idempotency check; execute the mapped lifecycle action; update repository state; complete, schedule follow-up, or dead-letter the message.
+
+Unmapped scopes MUST log and complete without Snyk side effects per the `scope-mapping` capability.
 
 #### Scenario: Successful ADO repo create
 - **WHEN** a repo-created event with `source: "ado"` passes idempotency checks and scope mapping resolves a Snyk org
-- **THEN** the worker imports and tags the target, updates repo state, and completes the message
+- **THEN** the worker triggers import, upserts pending repository state, schedules import job polling if needed, and completes or dead-letters the message per retry policy
+
+#### Scenario: Successful ADO repo delete
+- **WHEN** a repo-deleted event with `source: "ado"` passes idempotency checks and scope mapping resolves a Snyk org
+- **THEN** the worker removes the target per configured removal mode, updates repository state, and completes the message
 
 #### Scenario: Successful GitHub repo create
 - **WHEN** a repo-created event with `source: "github"` passes idempotency checks and scope mapping resolves a Snyk org
-- **THEN** the worker imports and tags the target, updates repo state, and completes the message
+- **THEN** the worker imports and updates repo state per lifecycle contract (when GitHub normalization is implemented)
 
 ### Requirement: Idempotency by event and desired state
 The worker MUST skip duplicate processing when `lastEventId` matches the incoming `eventId` or when `desiredStateHash` already reflects the intended outcome.
@@ -119,8 +123,10 @@ The worker MUST skip duplicate processing when `lastEventId` matches the incomin
 ### Requirement: Unrecoverable failure handling
 On unrecoverable processing failure, the worker MUST dead-letter the message and emit an alert.
 
+Import job polling MUST dead-letter with reason `ImportJobFailed` when `retryCount` reaches 5 on `import_poll` follow-up messages.
+
 #### Scenario: Snyk import permanently fails
-- **WHEN** import fails after retries/backoff with a non-transient error
+- **WHEN** import fails after retries/backoff with a non-transient error or max poll retries exceeded
 - **THEN** the message is dead-lettered and an alert is raised
 
 ### Requirement: Rate limit backoff
@@ -131,11 +137,21 @@ The worker MUST apply exponential backoff when Snyk or upstream provider APIs (A
 - **THEN** the worker retries with exponential backoff before succeeding or failing unrecoverably
 
 ### Requirement: Import job polling with concurrency limits
-When an import is initiated, the worker MUST poll the import job status with exponential backoff and MUST respect configured concurrency limits for in-flight import jobs.
+When an import is initiated, the worker MUST NOT block the Service Bus receive loop until the job completes. The worker MUST schedule follow-up messages on the same queue with exponential backoff and MUST respect `snyk.maxConcurrentPendingImports` (default 100 per worker process).
+
+Follow-up messages MUST carry `syncPhase`, `importJobId`, `importStatus`, and `retryCount`.
 
 #### Scenario: Import in progress
 - **WHEN** Snyk returns an in-progress import job
-- **THEN** the worker polls until completion, failure, or unrecoverable timeout
+- **THEN** the worker upserts `importStatus=pending`, completes the current message, and schedules an `import_poll` follow-up with incremented backoff
+
+#### Scenario: Import job completes
+- **WHEN** an `import_poll` follow-up finds the import job succeeded
+- **THEN** the worker updates repository state with `importStatus=complete`, retains `importJobId`, sets `snykTargetId`, and completes the follow-up message without project tagging
+
+#### Scenario: Pending import limit reached
+- **WHEN** the count of repository rows with `importStatus=pending` equals or exceeds `snyk.maxConcurrentPendingImports`
+- **THEN** the worker logs a structured warning, completes the lifecycle message, and schedules a `lifecycle_deferred` follow-up with backoff rather than dead-lettering
 
 ### Requirement: Ignored repo short-circuit
 Before executing repo lifecycle actions, the worker MUST evaluate ignore policy (list + regex) and MUST NOT import repos that match.
@@ -198,29 +214,6 @@ The repository MUST include integration tests that publish native queue message 
 - **WHEN** an integration test publishes a raw GitHub webhook fixture to the queue
 - **THEN** the worker receives and completes the message
 
-### Requirement: Slice-4 ADO normalization with scope mapping
-After successful ADO lifecycle normalization, the worker MUST resolve scope mapping per the `scope-mapping` capability using `ado.projectName` as the lookup key, log the resolution outcome (mapped, default, or unmapped), and complete the message without repository state reads/writes or Snyk API side effects.
-
-The sync-state table MUST be ensured on startup for use by follow-up changes.
-
-GitHub queue messages MUST be completed without normalization or sync side effects until GitHub normalization is implemented. GitHub scope mapping entries MUST be loaded from config at startup for use by follow-up changes.
-
-#### Scenario: Valid ADO message with mapped project
-- **WHEN** the worker normalizes an ADO lifecycle message whose `ado.projectName` matches a config entry
-- **THEN** it logs the resolved `snykOrgId`, then completes the message
-
-#### Scenario: Valid ADO message with unmapped project
-- **WHEN** the worker normalizes an ADO lifecycle message whose `ado.projectName` has no config entry and no `defaultSnykOrgId` is configured
-- **THEN** it logs an unmapped-scope warning and completes the message
-
-#### Scenario: Valid ADO message with default org
-- **WHEN** the worker normalizes an ADO lifecycle message for an unmapped project and `defaultSnykOrgId` is configured
-- **THEN** it logs use of the default Snyk org id and completes the message
-
-#### Scenario: Valid GitHub message in slice 4
-- **WHEN** the worker parses a valid GitHub webhook queue message
-- **THEN** it completes the message without normalization or scope resolution
-
 ### Requirement: Native queue message parsing
 The worker MUST deserialize inbound queue messages as JSON and identify the provider source from message structure. ADO messages MUST be identified when `eventType` is `AzureDevOpsAuditEvent` **or** `subject` is `AzureDevOps/Auditing`; the audit record MUST be extracted from `data`.
 
@@ -243,3 +236,58 @@ Unrecognized or invalid JSON MUST dead-letter with reason `InvalidMessage`.
 #### Scenario: Malformed queue message
 - **WHEN** the worker receives a message that is not valid JSON, is not a JSON object, or matches no supported provider shape
 - **THEN** it dead-letters the message with reason `InvalidMessage`
+
+### Requirement: Slice-5 ADO lifecycle sync with import deferral
+After successful ADO lifecycle normalization and scope mapping resolution, the worker MUST execute repository lifecycle sync per the `repo-lifecycle` and `snyk-target-sync` capabilities for mapped scopes.
+
+The worker MUST read and write repository sync state, call the Snyk API, and route internal follow-up messages on the same queue.
+
+GitHub queue messages MUST be completed without normalization or sync side effects until GitHub normalization is implemented.
+
+#### Scenario: Valid ADO message with mapped project and repo created
+- **WHEN** the worker normalizes a repo-created ADO message whose scope mapping resolves
+- **THEN** it triggers Snyk import and updates sync state without completing import inline in the receive handler
+
+#### Scenario: Valid ADO message with unmapped project
+- **WHEN** the worker normalizes an ADO lifecycle message whose scope has no mapping and no default org
+- **THEN** it logs an unmapped-scope warning and completes the message without Snyk side effects
+
+#### Scenario: Valid GitHub message in slice 5
+- **WHEN** the worker parses a valid GitHub webhook queue message
+- **THEN** it completes the message without normalization or sync side effects
+
+### Requirement: Internal follow-up message routing
+The worker MUST deserialize internal follow-up messages on the same Service Bus queue distinguished by top-level `syncPhase`. Supported values: `import_poll`, `lifecycle_deferred`.
+
+Internal messages MUST NOT be parsed as ADO Event Grid or GitHub webhook payloads.
+
+#### Scenario: Import poll follow-up received
+- **WHEN** the worker receives a message with `syncPhase: import_poll`
+- **THEN** it polls the referenced import job and reschedules, finalizes state, or dead-letters per retry policy
+
+#### Scenario: Lifecycle deferred follow-up received
+- **WHEN** the worker receives a message with `syncPhase: lifecycle_deferred`
+- **THEN** it re-attempts the deferred lifecycle action when pending import count is below the configured limit
+
+### Requirement: Slice-5 lifecycle sync without project tagging
+In this implementation slice, after import job completion the worker MUST update repository state with `importStatus=complete` and `snykTargetId`. The worker MUST NOT call the Projects API or set `tagApplied=true`.
+
+#### Scenario: Import completes in slice 5
+- **WHEN** the import job succeeds
+- **THEN** repository state is updated with `importStatus=complete`, `snykTargetId`, retained `importJobId`, and `tagApplied=false`
+
+### Requirement: Operator Snyk settings in config
+The worker MUST load optional `snyk` settings from operator config at startup: `maxConcurrentPendingImports` (default 100) and `targetRemoval` with keys `onRename`, `onDefaultBranchChange`, and `onRepoDelete` (each `deactivate` or `delete`, default `deactivate`).
+
+Invalid removal mode values MUST cause startup failure.
+
+The worker MUST require `SNYK_TOKEN` from the environment when Snyk sync is enabled for mapped ADO processing.
+
+#### Scenario: Default Snyk settings
+- **WHEN** `snyk` section is absent from config
+- **THEN** the worker uses `maxConcurrentPendingImports=100` and deactivation for all removal actions
+
+#### Scenario: Missing SNYK_TOKEN at startup
+- **WHEN** the worker starts without `SNYK_TOKEN` set
+- **THEN** it exits with a non-zero status and a clear error message
+

@@ -1,9 +1,7 @@
 ## Purpose
 
 Resolve provider scopes (ADO project or GitHub org) to Snyk organizations and integrations via operator configuration and the Snyk API. Scope mapping replaces manual Table Storage `_meta` onboarding.
-
 ## Requirements
-
 ### Requirement: Config-based scope to Snyk org mapping
 Operators MUST declare scope-to-Snyk-org mappings in operator config (`config.yaml`). ADO mappings MUST use ADO project name as the lookup key under the `azure-repos` integration type section. GitHub mappings MUST use GitHub organization name (login) as the lookup key under a GitHub integration type section (`github`, `github-cloud`, `github-server`, or `github-enterprise`).
 
@@ -55,7 +53,7 @@ When `defaultSnykOrgId` is used without an explicit scope entry, the worker MUST
 ### Requirement: Integration resolution via Snyk API
 After resolving a Snyk organization id and integration type, the worker MUST retrieve the corresponding integration id. Integration ids MUST NOT be stored in sync-state Table Storage.
 
-Each scope mapping entry MAY optionally include `snykIntegrationId`. When set, the worker MUST use the configured id. When omitted, or when Snyk returns an invalid integration response for a configured id, the worker MUST list integrations for the Snyk org via API, match by the section integration type, and MAY cache the result in process memory for the worker lifetime.
+Each scope mapping entry MAY optionally include `snykIntegrationId`. When set, the worker MUST use the configured id. When omitted, or when Snyk returns an invalid integration response for a configured id, the worker MUST list integrations for the Snyk org via API, match by the section integration type, and MAY cache the result in process memory for the lifetime of the worker process.
 
 Integration lookup failures MUST report the requested Snyk integration type and the integration types available in the org — not the provider source name.
 
@@ -91,3 +89,11 @@ Unmapped scopes MUST NOT dead-letter the message.
 #### Scenario: Unmapped scope with default org
 - **WHEN** an ADO or GitHub event arrives for an unmapped scope name and `defaultSnykOrgId` is configured
 - **THEN** the worker uses the default Snyk organization and default integration type for the provider source
+
+### Requirement: Optional integration id in operator config
+Scope mapping list entries MAY include an optional `snykIntegrationId` string. When present, the value MUST be non-empty. Duplicate validation rules for scope entries otherwise unchanged.
+
+#### Scenario: Config with integration id
+- **WHEN** operator config includes `snykIntegrationId` on an ADO project entry under `azure-repos`
+- **THEN** the worker uses that integration id for Snyk actions targeting that scope
+

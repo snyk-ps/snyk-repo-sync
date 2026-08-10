@@ -1,9 +1,7 @@
 ## Purpose
 
 Azure Table Storage schema and access patterns for per-repository sync state (idempotency, target tracking, and lifecycle bookkeeping). Scope-to-Snyk mapping is owned by the `scope-mapping` capability and operator config — not Table Storage.
-
 ## Requirements
-
 ### Requirement: Table name and keys
 Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `PartitionKey = {source}:{scopeId}` where `source` is `ado` or `github`, and `RowKey = {repositoryId}`. Scope configuration MUST NOT be stored in Table Storage; scope mapping is owned by the `scope-mapping` capability.
 
@@ -16,11 +14,29 @@ Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `Par
 - **THEN** the partition key is `github:{orgId}` and the row key is the GitHub repository id
 
 ### Requirement: Repository state schema
-Each repository row MUST store: `repoName`, `snykTargetId`, `defaultBranch`, `status`, `desiredStateHash`, `lastEventId`, and `tagApplied`.
+Each repository row MUST store: `repoName`, `snykTargetId`, `defaultBranch`, `status`, `desiredStateHash`, `lastEventId`, `tagApplied`, `importJobId`, and `importStatus`.
 
-#### Scenario: After successful import
-- **WHEN** import and tagging succeed
-- **THEN** the repository row is upserted with current target id, branch, status, hash, and event id
+`importStatus` MUST be one of: `pending`, `failed`, `complete`.
+
+`snykTargetId` MUST NOT be written until import job completion. In this implementation slice, `tagApplied` MUST remain `false` (project tagging deferred).
+
+After successful import, `importJobId` MUST be retained on the repository row for audit. A subsequent import MUST overwrite `importJobId` with the new job id while that job is pending.
+
+#### Scenario: Import initiated
+- **WHEN** a Snyk import job is started
+- **THEN** the row is upserted with `importJobId`, `importStatus=pending`, and `tagApplied=false`
+
+#### Scenario: Import completes with audit retention
+- **WHEN** import job succeeds in this slice
+- **THEN** the row is upserted with `importStatus=complete`, `importJobId` retained, `snykTargetId` set, and `tagApplied=false`
+
+#### Scenario: After successful import (legacy scenario updated)
+- **WHEN** import succeeds in this slice
+- **THEN** the repository row is upserted with current target id, branch, status, hash, event id, retained import job id, and `importStatus=complete`
+
+#### Scenario: Import failed
+- **WHEN** import job fails
+- **THEN** the row is upserted with `importStatus=failed` and the current `importJobId`
 
 ### Requirement: Ignore list persistence
 When the ignore-list JSON file is successfully retrieved, its contents MUST be persisted in state for use by the worker and scheduled ignore job.
@@ -83,3 +99,4 @@ Repository rows MUST persist spec fields as Azure Table entity properties: strin
 #### Scenario: Repository row round-trip
 - **WHEN** a repository row is written and read back
 - **THEN** all required repository fields are present with correct types
+

@@ -29,27 +29,8 @@ Integration lookup failures MUST report the requested Snyk integration type and 
 
 ## ADDED Requirements
 
-### Requirement: Snyk integration type as scope mapping section key
-Scope mapping sections MUST be keyed by Snyk integration type, not provider source names. Allowed top-level keys under `scopeMapping` (other than `defaultSnykOrgId`) are `azure-repos`, `github`, `github-cloud`, `github-server`, and `github-enterprise`.
-
-Legacy key `ado` MUST be rejected at startup with a clear error.
-
-The integration type used for Snyk API lookup MUST be the section key. When `defaultSnykOrgId` is used without an explicit scope entry, the worker MUST use `azure-repos` for ADO and `github` for GitHub unless exactly one GitHub integration type section is configured.
-
-#### Scenario: ADO entry under azure-repos section
-- **WHEN** an ADO scope mapping entry is listed under `scopeMapping.azure-repos`
-- **THEN** the worker uses `azure-repos` for integration lookup
-
-#### Scenario: GitHub entry under github-enterprise section
-- **WHEN** a GitHub scope mapping entry is listed under `scopeMapping.github-enterprise`
-- **THEN** the worker resolves the integration whose Snyk type is `github-enterprise`
-
-#### Scenario: Legacy ADO scope mapping key rejected
-- **WHEN** operator config contains `scopeMapping.ado`
-- **THEN** the worker exits at startup with a clear configuration error
-
 ### Requirement: Optional integration id in operator config
-Scope mapping list entries MAY include an optional non-empty `snykIntegrationId` string. Duplicate validation rules for scope entries otherwise unchanged.
+Scope mapping list entries MAY include an optional `snykIntegrationId` string. When present, the value MUST be non-empty. Duplicate validation rules for scope entries otherwise unchanged.
 
 #### Scenario: Config with integration id
 - **WHEN** operator config includes `snykIntegrationId` on an ADO project entry under `azure-repos`
