@@ -7,11 +7,14 @@ from pathlib import Path
 
 import yaml
 
+from config.ado_settings import AdoSettings, parse_ado_settings, require_ado_pat
 from config.errors import ConfigError
 from config.scope_mapping import ScopeMappingSettings, parse_scope_mapping
+from config.snyk_settings import SnykSettings, parse_snyk_settings
 
 DEFAULT_CONFIG_PATH = "data/config.yaml"
 DEFAULT_TABLE_NAME = "SnykSyncState"
+SNYK_TOKEN_ENV = "SNYK_TOKEN"
 
 SERVICEBUS_FQN_ENV = "SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
 SERVICEBUS_QUEUE_ENV = "SERVICEBUS_QUEUE_NAME"
@@ -41,7 +44,9 @@ class WorkerSettings:
 
     service_bus: ServiceBusSettings
     sync_state: SyncStateSettings
+    ado: AdoSettings
     scope_mapping: ScopeMappingSettings
+    snyk: SnykSettings
 
 
 def _require_non_empty(value: object, label: str) -> str:
@@ -99,6 +104,8 @@ def load_worker_settings(
 
     resolved_table_name = table_name.strip() if isinstance(table_name, str) and table_name.strip() else DEFAULT_TABLE_NAME
     scope_mapping = parse_scope_mapping(raw.get("scopeMapping"))
+    snyk = parse_snyk_settings(raw.get("snyk"))
+    ado = parse_ado_settings(raw.get("ado"), env)
 
     return WorkerSettings(
         service_bus=ServiceBusSettings(
@@ -118,5 +125,20 @@ def load_worker_settings(
             ),
             table_name=resolved_table_name,
         ),
+        ado=ado,
         scope_mapping=scope_mapping,
+        snyk=snyk,
     )
+
+
+def require_snyk_token(environ: Mapping[str, str] | None = None) -> str:
+    """Return the Snyk API token from the environment.
+
+    Raises:
+        ConfigError: When ``SNYK_TOKEN`` is missing or empty.
+    """
+    env = os.environ if environ is None else environ
+    token = env.get(SNYK_TOKEN_ENV)
+    if not isinstance(token, str) or not token.strip():
+        raise ConfigError(f"Missing or empty required environment variable: {SNYK_TOKEN_ENV}")
+    return token.strip()

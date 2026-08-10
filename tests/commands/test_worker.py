@@ -38,6 +38,8 @@ def test_main_prints_help_without_command() -> None:
     assert main([]) == 0
 
 
+@patch("commands.worker.require_ado_pat", return_value="test-ado-pat")
+@patch("commands.worker.require_snyk_token", return_value="test-token")
 @patch("commands.worker.WorkerConsumer")
 @patch("commands.worker.SyncStateStore")
 @patch("commands.worker.load_worker_settings")
@@ -47,21 +49,12 @@ def test_run_worker_starts_consumer(
     load_settings,
     sync_state_cls,
     consumer_cls,
+    _require_token,
+    _require_ado_pat,
 ) -> None:
-    from config.scope_mapping import ScopeMappingSettings
-    from config.settings import ServiceBusSettings, SyncStateSettings, WorkerSettings
+    from tests.conftest import make_worker_settings
 
-    load_settings.return_value = WorkerSettings(
-        service_bus=ServiceBusSettings(
-            fully_qualified_namespace="example.servicebus.windows.net",
-            queue_name="repo-sync-events",
-        ),
-        sync_state=SyncStateSettings(
-            storage_account_endpoint="https://example.table.core.windows.net",
-            table_name="SnykSyncState",
-        ),
-        scope_mapping=ScopeMappingSettings.empty(),
-    )
+    load_settings.return_value = make_worker_settings()
     sync_state = sync_state_cls.return_value
     consumer = consumer_cls.return_value
     consumer.run.side_effect = KeyboardInterrupt

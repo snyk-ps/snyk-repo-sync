@@ -5,9 +5,19 @@ import logging
 
 from azure.identity import DefaultAzureCredential
 
-from config.settings import ConfigError, DEFAULT_CONFIG_PATH, load_worker_settings
+from ado.client import AdoClient
+from config.settings import (
+    ConfigError,
+    DEFAULT_CONFIG_PATH,
+    load_worker_settings,
+    require_ado_pat,
+    require_snyk_token,
+)
+from snyk.client import SnykClient
+from snyk.integration_resolver import IntegrationResolver
 from sync_state import SyncStateStore
 from worker.consumer import WorkerConsumer
+from worker.lifecycle import WorkerSyncDependencies
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +45,8 @@ def run_worker(args: argparse.Namespace) -> int:
     configure_logging()
     try:
         settings = load_worker_settings(args.config)
+        snyk_token = require_snyk_token()
+        ado_pat = require_ado_pat()
     except ConfigError as exc:
         logger.error("%s", exc)
         return 1
@@ -47,7 +59,21 @@ def run_worker(args: argparse.Namespace) -> int:
         logger.error("Failed to ensure sync-state table: %s", exc)
         return 1
 
-    consumer = WorkerConsumer(settings, sync_state, credential=credential)
+    snyk_client = SnykClient(snyk_token)
+    ado_client = AdoClient(
+        ado_pat,
+        organization=settings.ado.organization,
+        host=settings.ado.host,
+    )
+    sync_deps = WorkerSyncDependencies(
+        sync_state=sync_state,
+        snyk=snyk_client,
+        ado=ado_client,
+        integration_resolver=IntegrationResolver(snyk_client),
+        scope_mapping=settings.scope_mapping,
+        snyk_settings=settings.snyk,
+    )
+    consumer = WorkerConsumer(settings, sync_state, sync_deps=sync_deps, credential=credential)
     try:
         consumer.run()
     except KeyboardInterrupt:

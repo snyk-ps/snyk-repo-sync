@@ -1,5 +1,16 @@
 ## MODIFIED Requirements
 
+### Requirement: Import branch resolution
+Before starting a Snyk import for ADO repository lifecycle actions, the worker MUST include `target.branch` in the import payload. When the normalized event provides `defaultBranch`, that value MUST be used. When the event does not provide a default branch, the worker MUST resolve the branch via ADO Git REST API using `ADO_PAT` and configured `ado.organization`. The worker MUST NOT infer a hardcoded branch name such as `main`. Repository state `defaultBranch` MUST match the branch used in the import payload.
+
+#### Scenario: Repo created with audit default branch
+- **WHEN** a repo-created ADO event includes `payload.defaultBranch`
+- **THEN** the worker starts import with that branch and does not call ADO REST for branch lookup
+
+#### Scenario: Repo renamed without branch in event
+- **WHEN** a repo-renamed ADO event omits `defaultBranch` and existing sync state has no stored branch
+- **THEN** the worker resolves the repository default branch via ADO Git REST API before starting import and stores that branch in repository state
+
 ### Requirement: Repo created
 On repository created, the service MUST import the repository when scope mapping resolves and ignore policy does not apply. Project tagging is deferred to the `snyk-project-tagging` follow-up change.
 

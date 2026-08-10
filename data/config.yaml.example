@@ -1,6 +1,12 @@
 # Operator configuration (non-secrets).
 # Mount at /config/config.yaml in production (Azure Files).
 # Authenticate with DefaultAzureCredential (managed identity or `az login`).
+# Set SNYK_TOKEN and ADO_PAT in the environment (secrets).
+# ADO_PAT: Code (Read) scope; access to ado.organization and mapped projects.
+
+ado:
+  organization: contoso
+  # host: dev.azure.com
 
 serviceBus:
   fullyQualifiedNamespace: mynamespace.servicebus.windows.net
@@ -13,9 +19,18 @@ syncState:
 # Optional: map ADO project names and GitHub org logins to Snyk organization ids.
 # scopeMapping:
 #   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"
-#   ado:
+#   azure-repos:
 #     - projectName: Contoso-Platform
 #       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-#   github:
+#       # snykIntegrationId: "bbbbbbbb-..."       # optional
+#   github-enterprise:
 #     - orgName: contoso
 #       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+# Optional: Snyk lifecycle sync behaviour (defaults shown).
+# snyk:
+#   maxConcurrentPendingImports: 100
+#   targetRemoval:
+#     onRename: deactivate              # deactivate | delete
+#     onDefaultBranchChange: deactivate
+#     onRepoDelete: deactivate

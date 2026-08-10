@@ -1,6 +1,7 @@
 """Tests for queue message handling."""
 
 import json
+from unittest.mock import MagicMock
 
 from config.scope_mapping import (
     AdoScopeEntry,
@@ -8,7 +9,9 @@ from config.scope_mapping import (
     ScopeMappingSettings,
     UnmappedScope,
 )
+from config.snyk_settings import SnykSettings, TargetRemovalSettings
 from worker.handler import handle_queue_message
+from worker.lifecycle import WorkerSyncDependencies
 
 
 def _ado_created_body(project_name: str = "proj") -> bytes:
@@ -77,11 +80,13 @@ def test_handle_ado_created_resolves_mapped_scope(caplog) -> None:
         default_snyk_org_id=None,
         ado_by_project_name={
             "proj": AdoScopeEntry(
-                project_name="proj",
                 snyk_org_id="mapped-org",
+                integration_type="azure-repos",
+                source="ado",
             ),
         },
         github_by_org_name={},
+        configured_github_integration_types=frozenset(),
     )
 
     with caplog.at_level("INFO"):
@@ -98,6 +103,7 @@ def test_handle_ado_created_uses_default_org(caplog) -> None:
         default_snyk_org_id="default-org",
         ado_by_project_name={},
         github_by_org_name={},
+        configured_github_integration_types=frozenset(),
     )
 
     with caplog.at_level("INFO"):
@@ -133,3 +139,64 @@ def test_handle_github_message_skips_scope_resolution() -> None:
 
     assert result.normalized is None
     assert result.scope_resolution is None
+
+
+def _sync_deps() -> WorkerSyncDependencies:
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = None
+    sync_state.count_pending_imports.return_value = 0
+    snyk = MagicMock()
+    snyk.start_import.return_value = "job-1"
+    integration_resolver = MagicMock()
+    integration_resolver.resolve.return_value = "integration-1"
+    ado = MagicMock()
+    return WorkerSyncDependencies(
+        sync_state=sync_state,
+        snyk=snyk,
+        ado=ado,
+        integration_resolver=integration_resolver,
+        scope_mapping=ScopeMappingSettings(
+            default_snyk_org_id=None,
+            ado_by_project_name={
+                "proj": AdoScopeEntry(
+                    snyk_org_id="mapped-org",
+                    integration_type="azure-repos",
+                    source="ado",
+                ),
+            },
+            github_by_org_name={},
+            configured_github_integration_types=frozenset(),
+        ),
+        snyk_settings=SnykSettings(
+            max_concurrent_pending_imports=100,
+            target_removal=TargetRemovalSettings(
+                on_rename="deactivate",
+                on_default_branch_change="deactivate",
+                on_repo_delete="deactivate",
+            ),
+        ),
+    )
+
+
+def test_handle_ado_created_with_sync_deps_schedules_import_poll() -> None:
+    mapping = ScopeMappingSettings(
+        default_snyk_org_id=None,
+        ado_by_project_name={
+            "proj": AdoScopeEntry(
+                snyk_org_id="mapped-org",
+                integration_type="azure-repos",
+                source="ado",
+            ),
+        },
+        github_by_org_name={},
+        configured_github_integration_types=frozenset(),
+    )
+    result = handle_queue_message(
+        _ado_created_body(),
+        scope_mapping=mapping,
+        sync_deps=_sync_deps(),
+    )
+
+    assert result.settlement == "complete"
+    assert len(result.scheduled_followups) == 1
+    assert result.scheduled_followups[0].body["syncPhase"] == "import_poll"

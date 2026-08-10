@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from worker.followup import InternalFollowUpMessage, parse_internal_follow_up
+
 ADO_AUDIT_EVENT_TYPE = "AzureDevOpsAuditEvent"
 ADO_AUDIT_SUBJECT = "AzureDevOps/Auditing"
 
@@ -23,6 +25,15 @@ class QueueMessage:
     event_id: str | None = None
 
 
+@dataclass(frozen=True)
+class InboundMessage:
+    """Discriminated union wrapper for provider or internal queue payloads."""
+
+    kind: Literal["provider", "internal"]
+    provider: QueueMessage | None = None
+    internal: InternalFollowUpMessage | None = None
+
+
 def _is_ado_message(data: dict[str, Any]) -> bool:
     if data.get("eventType") == ADO_AUDIT_EVENT_TYPE:
         return True
@@ -35,6 +46,23 @@ def _is_github_message(data: dict[str, Any]) -> bool:
     repository = data.get("repository")
     action = data.get("action")
     return isinstance(repository, dict) and isinstance(action, str) and bool(action.strip())
+
+
+def _is_internal_message(data: dict[str, Any]) -> bool:
+    sync_phase = data.get("syncPhase")
+    return sync_phase in {"import_poll", "lifecycle_deferred"}
+
+
+def parse_inbound_message(body: str | bytes) -> InboundMessage:
+    """Parse a queue message as either an internal follow-up or provider payload."""
+    data = _load_json_object(body)
+    if _is_internal_message(data):
+        try:
+            internal = parse_internal_follow_up(data)
+        except ValueError as exc:
+            raise MessageParseError(str(exc)) from exc
+        return InboundMessage(kind="internal", internal=internal)
+    return InboundMessage(kind="provider", provider=parse_queue_message(body))
 
 
 def parse_queue_message(body: str | bytes) -> QueueMessage:
@@ -52,18 +80,7 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
     Raises:
         MessageParseError: If JSON is invalid or the message shape is unrecognized.
     """
-    if isinstance(body, bytes):
-        text = body.decode("utf-8")
-    else:
-        text = body
-
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise MessageParseError("message body must be valid JSON") from exc
-
-    if not isinstance(data, dict):
-        raise MessageParseError("message body must be a JSON object")
+    data = _load_json_object(body)
 
     if _is_ado_message(data):
         audit_record = data.get("data")
@@ -84,3 +101,19 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
         return QueueMessage(source="github", provider_payload=data)
 
     raise MessageParseError("unrecognized queue message shape")
+
+
+def _load_json_object(body: str | bytes) -> dict[str, Any]:
+    if isinstance(body, bytes):
+        text = body.decode("utf-8")
+    else:
+        text = body
+
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise MessageParseError("message body must be valid JSON") from exc
+
+    if not isinstance(data, dict):
+        raise MessageParseError("message body must be a JSON object")
+    return data

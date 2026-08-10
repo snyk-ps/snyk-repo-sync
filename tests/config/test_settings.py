@@ -9,15 +9,21 @@ from config.settings import (
     DEFAULT_TABLE_NAME,
     SERVICEBUS_FQN_ENV,
     SERVICEBUS_QUEUE_ENV,
+    SNYK_TOKEN_ENV,
     SYNC_STATE_ENDPOINT_ENV,
     SYNC_STATE_TABLE_ENV,
     ConfigError,
     load_worker_settings,
+    require_snyk_token,
 )
 
 
 def _write_config(tmp_path: Path, data: dict) -> str:
     path = tmp_path / "config.yaml"
+    data.setdefault(
+        "ado",
+        {"organization": "example-org"},
+    )
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     return str(path)
 
@@ -44,6 +50,8 @@ def test_load_worker_settings_success(tmp_path: Path) -> None:
     assert settings.sync_state.table_name == DEFAULT_TABLE_NAME
     assert settings.scope_mapping.default_snyk_org_id is None
     assert settings.scope_mapping.ado_by_project_name == {}
+    assert settings.snyk.max_concurrent_pending_imports == 100
+    assert settings.ado.organization == "example-org"
 
 
 def test_load_worker_settings_with_scope_mapping(tmp_path: Path) -> None:
@@ -59,7 +67,7 @@ def test_load_worker_settings_with_scope_mapping(tmp_path: Path) -> None:
             },
             "scopeMapping": {
                 "defaultSnykOrgId": "default-org",
-                "ado": [
+                "azure-repos": [
                     {
                         "projectName": "proj",
                         "snykOrgId": "ado-org",
@@ -87,7 +95,7 @@ def test_load_worker_settings_rejects_duplicate_scope_mapping(tmp_path: Path) ->
                 "storageAccountEndpoint": "https://example.table.core.windows.net",
             },
             "scopeMapping": {
-                "ado": [
+                "azure-repos": [
                     {"projectName": "dup", "snykOrgId": "org-1"},
                     {"projectName": "dup", "snykOrgId": "org-2"},
                 ],
@@ -95,7 +103,7 @@ def test_load_worker_settings_rejects_duplicate_scope_mapping(tmp_path: Path) ->
         },
     )
 
-    with pytest.raises(ConfigError, match="Duplicate scopeMapping.ado projectName"):
+    with pytest.raises(ConfigError, match="Duplicate scopeMapping.azure-repos projectName"):
         load_worker_settings(path)
 
 
@@ -172,3 +180,12 @@ def test_load_worker_settings_invalid_yaml(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="Invalid YAML"):
         load_worker_settings(str(path))
+
+
+def test_require_snyk_token_success() -> None:
+    assert require_snyk_token({SNYK_TOKEN_ENV: "secret-token"}) == "secret-token"
+
+
+def test_require_snyk_token_missing() -> None:
+    with pytest.raises(ConfigError, match=SNYK_TOKEN_ENV):
+        require_snyk_token({})

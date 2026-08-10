@@ -4,9 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from tests.conftest import make_worker_settings
 from worker.consumer import _message_body, process_message
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "fixtures"
+SETTINGS = make_worker_settings()
 
 
 class FakeMessage:
@@ -45,7 +47,7 @@ def test_process_message_completes_valid_ado_message() -> None:
     message = FakeMessage(body)
     receiver = MagicMock()
 
-    process_message(message, receiver)
+    process_message(message, receiver, settings=SETTINGS)
 
     receiver.complete_message.assert_called_once_with(message)
     receiver.dead_letter_message.assert_not_called()
@@ -56,7 +58,7 @@ def test_process_message_completes_valid_github_message() -> None:
     message = FakeMessage(body)
     receiver = MagicMock()
 
-    process_message(message, receiver)
+    process_message(message, receiver, settings=SETTINGS)
 
     receiver.complete_message.assert_called_once_with(message)
     receiver.dead_letter_message.assert_not_called()
@@ -66,7 +68,7 @@ def test_process_message_dead_letters_invalid_message() -> None:
     message = FakeMessage(b"{}")
     receiver = MagicMock()
 
-    process_message(message, receiver)
+    process_message(message, receiver, settings=SETTINGS)
 
     receiver.dead_letter_message.assert_called_once()
     kwargs = receiver.dead_letter_message.call_args.kwargs
@@ -99,7 +101,7 @@ def test_process_message_completes_default_branch_changed_without_previous_branc
     message = FakeMessage(body)
     receiver = MagicMock()
 
-    process_message(message, receiver)
+    process_message(message, receiver, settings=SETTINGS)
 
     receiver.complete_message.assert_called_once_with(message)
     receiver.dead_letter_message.assert_not_called()
@@ -113,7 +115,7 @@ def test_process_message_dead_letters_invalid_normalization() -> None:
     message = FakeMessage(body)
     receiver = MagicMock()
 
-    process_message(message, receiver)
+    process_message(message, receiver, settings=SETTINGS)
 
     receiver.dead_letter_message.assert_called_once()
     kwargs = receiver.dead_letter_message.call_args.kwargs

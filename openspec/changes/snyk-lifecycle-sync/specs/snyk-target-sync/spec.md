@@ -3,7 +3,21 @@
 ### Requirement: Deactivate over delete
 Target removal mode MUST be configurable in operator config under `snyk.targetRemoval` for repository rename, default branch change, and repository deletion. Allowed values: `deactivate` or `delete`. Default MUST be `deactivate` when unset.
 
-When removal mode is `deactivate`, the integration MUST use the Targets API deactivate operation. When removal mode is `delete`, the integration MUST use the Targets API delete operation.
+When removal mode is `deactivate`, the integration MUST deactivate every Snyk project associated with the target via the v1 Projects API (`POST /v1/org/{orgId}/project/{projectId}/deactivate`). When removal mode is `delete`, the integration MUST delete the target via the REST Targets API (`DELETE /rest/orgs/{org_id}/targets/{target_id}`).
+
+Re-import flows (rename, default branch change) MUST resolve the old target id, remove it successfully, and only then start a new import. Removal failures MUST NOT proceed to import.
+
+#### Scenario: Resolve target id after import
+- **WHEN** an import job completes but repository state has no `snykTargetId`
+- **THEN** the worker resolves the target id via the REST Targets API and persists it before marking import complete
+
+#### Scenario: Resolve target id before removal
+- **WHEN** a rename, default branch change, or delete event is processed and `snykTargetId` is empty in state
+- **THEN** the worker resolves the target id via REST lookup using the appropriate repository name and branch for the old target
+
+#### Scenario: Reimport blocked on removal failure
+- **WHEN** target removal fails during rename or default branch change
+- **THEN** the worker does not start a new import and surfaces the error for retry or DLQ
 
 #### Scenario: Default removal mode
 - **WHEN** `snyk.targetRemoval` is absent
@@ -52,7 +66,7 @@ A repository MUST NOT be treated as synced until the Snyk import job completes s
 
 #### Scenario: Import job succeeded
 - **WHEN** the import job succeeds
-- **THEN** the worker sets `importStatus=complete`, retains `importJobId` for audit, and sets `snykTargetId` without calling the Projects API
+- **THEN** the worker sets `importStatus=complete`, retains `importJobId` for audit, resolves and sets `snykTargetId` via the REST Targets API when not already in state, and does not call the Projects API for tagging
 
 ### Requirement: Import failure logging
 Import failures MUST be logged with structured fields: `source`, scope id, repository id, Snyk org id, import job id, and failure reason. Logs MUST NOT contain secrets.

@@ -2,7 +2,7 @@
 
 Queue-driven worker that consumes repository lifecycle events from Azure Service Bus and syncs Snyk targets for Azure DevOps and GitHub repositories.
 
-External systems (ADO audit stream via Event Grid, GitHub webhooks) publish native JSON to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue. The current implementation slice parses queue messages, normalizes ADO audit lifecycle events, resolves scope-to-Snyk org mapping from operator config, ensures the sync-state table exists, and completes messages; repository state writes and Snyk API sync follow in subsequent changes.
+External systems (ADO audit stream via Event Grid, GitHub webhooks) publish native JSON to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue, normalizes ADO lifecycle events, syncs mapped repositories to Snyk via async import jobs, and persists sync state in Azure Table Storage. Project tagging is deferred to a follow-up change.
 
 **Operators:** queue and ingress setup (Service Bus, ADO audit stream, GitHub webhooks) are documented in **[INGESTION.md](INGESTION.md)**. ADO audit events are batched and typically arrive within ~30 minutes.
 
@@ -99,9 +99,11 @@ uv run python src/main.py worker run --config data/config.yaml
 - Consumes native queue messages from a pre-provisioned Service Bus queue (Event Grid JSON for ADO; raw webhook JSON for GitHub)
 - Authenticates with `DefaultAzureCredential` and Azure RBAC (no connection strings)
 - Parses provider-native message shapes and normalizes ADO audit lifecycle events into a provider-neutral model
-- Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `defaultSnykOrgId`)
-- Ensures the sync-state table exists on startup (repository rows written in a follow-up change)
-- Passes GitHub messages through without normalization (GitHub mapper deferred); Snyk API sync deferred
+- Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `snykIntegrationId`, optional `defaultSnykOrgId`)
+- Syncs mapped ADO repos to Snyk: import with async job polling, configurable target removal (`deactivate` or `delete`), sync-state tracking
+- Schedules internal follow-up messages on the same queue for import polling and concurrency backpressure
+- Requires `SNYK_TOKEN` in the environment; project tagging deferred
+- Passes GitHub messages through without normalization (GitHub mapper deferred)
 
 ## Testing
 
@@ -123,12 +125,12 @@ Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)**
 
 | Symptom | Likely cause |
 | ------- | ------------- |
-| Worker exits immediately with config error | `data/config.yaml` missing or incomplete — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+| Worker exits immediately with config error | `data/config.yaml` missing or incomplete, or `SNYK_TOKEN` unset — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 | Azure authentication failure | Run `az login` locally or verify managed identity RBAC assignments |
 | Integration tests skipped | Config file missing or invalid |
 | Messages dead-lettered with `InvalidMessage` | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON |
 | Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId` |
-| Log warnings for unmapped ADO project | Add a `scopeMapping.ado` entry for the project name or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+| Log warnings for unmapped ADO project | Add a `scopeMapping.azure-repos` entry for the project name or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 
 ## Deployment
 

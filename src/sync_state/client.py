@@ -2,10 +2,12 @@
 
 from typing import Any, Protocol
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.data.tables import TableClient, TableServiceClient
 from azure.identity import DefaultAzureCredential
 
 from config.settings import SyncStateSettings
+from sync_state.entities import RepositoryState, repository_partition_key
 
 
 class TableServiceClientFactory(Protocol):
@@ -65,3 +67,39 @@ class SyncStateStore:
             credential=self._credential,
         )
         self._table_client = service.create_table_if_not_exists(self._settings.table_name)
+
+    def get_repository(
+        self,
+        *,
+        source: str,
+        scope_id: str,
+        repository_id: str,
+    ) -> RepositoryState | None:
+        """Return repository state for a provider repository id."""
+        partition_key = repository_partition_key(source, scope_id)
+        try:
+            entity = self._table().get_entity(partition_key=partition_key, row_key=repository_id)
+        except ResourceNotFoundError:
+            return None
+        return RepositoryState.from_entity(entity)
+
+    def upsert_repository(
+        self,
+        state: RepositoryState,
+        *,
+        source: str,
+        scope_id: str,
+        repository_id: str,
+    ) -> None:
+        """Create or replace repository state for a provider repository id."""
+        partition_key = repository_partition_key(source, scope_id)
+        entity = state.to_entity(partition_key, repository_id)
+        self._table().upsert_entity(entity=entity, mode="merge")
+
+    def count_pending_imports(self) -> int:
+        """Count repository rows with ``importStatus=pending``."""
+        filter_query = "importStatus eq 'pending'"
+        count = 0
+        for _ in self._table().query_entities(query_filter=filter_query, select=["PartitionKey"]):
+            count += 1
+        return count

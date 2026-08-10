@@ -30,8 +30,10 @@ Slice 4 flow: parse → normalize ADO → resolve scope mapping → log → comp
 | List integrations | Org integrations | Resolve ADO/GitHub integration id |
 | Start import | Import API | Create/re-import target |
 | Get import job | Import job status | Poll pending jobs |
-| Deactivate target | Targets API | Removal mode `deactivate` |
-| Delete target | Targets API | Removal mode `delete` |
+| Deactivate projects | v1 Projects API | Removal mode `deactivate` (all projects under target) |
+| Delete target | REST Targets API | Removal mode `delete` |
+| Find target | REST Targets API | Resolve `snykTargetId` after import and before removal |
+| List projects | REST Projects API | Enumerate projects for deactivation |
 
 Rate limits (429): exponential backoff; counts toward retry budget where applicable.
 
@@ -43,7 +45,7 @@ A repository is synced when `importStatus=complete` and `snykTargetId` is set. `
 | ----- | ------------- | -------------- | -------------- | ------------- |
 | Import triggered | set | `pending` | empty | Schedule `import_poll` follow-up |
 | Job running | unchanged | `pending` | unchanged | Reschedule follow-up |
-| Job succeeded | **retained** | `complete` | set | Complete work; no Projects API |
+| Job succeeded | **retained** | `complete` | set via REST lookup | Complete work; no Projects API tagging |
 | Job failed | set | `failed` | unchanged | Retry or DLQ at max retries |
 
 Repository row MUST be upserted when import is initiated (`pending`), not only on success.
@@ -86,7 +88,7 @@ Parser routes on top-level `syncPhase`:
 
 ### 4. Integration id resolution
 
-- Optional `snykIntegrationId` on each `scopeMapping.ado` / `github` entry — shared across workers via mounted config.
+- Optional `snykIntegrationId` on each scope mapping entry under integration type sections (`azure-repos`, `github-*`) — shared across workers via mounted config.
 - When omitted: resolve via Snyk API; cache `(snykOrgId, integrationType) → integrationId` in **process memory** for worker lifetime only.
 - On 404/invalid configured id: log, refresh via API once, update in-memory cache.
 - Integration ids MUST NOT be persisted in sync-state Table Storage.
@@ -106,9 +108,11 @@ Values: `deactivate` | `delete`. Default `deactivate` when section or key omitte
 
 | Event | `deactivate` | `delete` |
 | ----- | ------------ | -------- |
-| Rename | Deactivate old → import new | Delete old → import new |
-| Default branch change | Deactivate old → re-import | Delete old → re-import |
-| Repo deleted | Deactivate target | Delete target; clear `snykTargetId` |
+| Rename | Resolve old target → deactivate all projects → import new | Resolve old target → REST delete → import new |
+| Default branch change | Resolve old target → deactivate all projects → re-import | Resolve old target → REST delete → re-import |
+| Repo deleted | Resolve target → deactivate all projects | Resolve target → REST delete; clear `snykTargetId` |
+
+Import job responses do not reliably include target ids. The worker resolves targets via REST (`GET /rest/orgs/{org_id}/targets`) using ADO project name, repository name, and branch. Re-import flows MUST succeed at removal before starting import.
 
 Issue ignores are not migrated on rename/branch change regardless of mode. Delete is irreversible — document in CONFIGURATION.md.
 
@@ -123,10 +127,12 @@ Issue ignores are not migrated on rename/branch change regardless of mode. Delet
 
 | Event | Behavior |
 | ----- | -------- |
-| **repo.created** | Import → poll → state `complete` + `snykTargetId`; skip if ignored (future) / unmapped / duplicate event |
-| **repo.renamed** | Remove old target per config → import new name → poll → update state |
-| **repo.default_branch_changed** | No action if `previousDefaultBranch` absent; else remove old → re-import → poll |
-| **repo.deleted** | Remove target per config; `status=inactive`; cancel pending import polling |
+| **repo.created** | Resolve import branch (event or ADO REST) → import → poll → state `complete` + `snykTargetId`; skip if ignored (future) / unmapped / duplicate event |
+| **repo.renamed** | Resolve old target id → remove per config (must succeed) → resolve import branch → import new name → poll until target id resolved |
+| **repo.default_branch_changed** | No action if `previousDefaultBranch` absent; else resolve old target → remove → import on new default branch → poll |
+| **repo.deleted** | Resolve target id → remove per config; `status=inactive`; DLQ if removal fails |
+
+**Import branch resolution:** Snyk Import API requires `target.branch`. Use `payload.defaultBranch` when present; otherwise call ADO Git REST API with `ADO_PAT` and configured `ado.organization`. Never infer a hardcoded branch such as `main`. Sync-state `defaultBranch` MUST match the branch sent in the import payload.
 
 **repo.created while import pending:** Do not start second import; poll existing job.
 
