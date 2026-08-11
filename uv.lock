@@ -648,7 +648,7 @@ wheels = [
 ]
 
 [[package]]
-name = "snyk-azure-repo-sync"
+name = "snyk-repo-sync"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

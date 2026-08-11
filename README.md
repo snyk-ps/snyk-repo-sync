@@ -1,4 +1,4 @@
-# Snyk Azure Repo Sync
+# Snyk Repo Sync
 
 Queue-driven worker that consumes repository lifecycle events from Azure Service Bus and syncs Snyk targets for Azure DevOps and GitHub repositories.
 
@@ -8,143 +8,27 @@ External systems (ADO audit stream via Event Grid, GitHub webhooks) publish nati
 
 ## Table of contents
 
-- [Installation and setup](#installation-and-setup)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Features](#features)
-- [Testing](#testing)
-- [Troubleshooting](#troubleshooting)
 - [Deployment](#deployment)
   - [Minimum requirements](#minimum-requirements-azure-container-apps)
   - [Azure Container Apps: portal walkthrough](#azure-container-apps-portal-walkthrough)
   - [Optional: KEDA Service Bus scaling](#optional-keda-service-bus-scaling)
   - [Logs and observability](#logs-and-observability)
   - [Deployment troubleshooting](#deployment-troubleshooting)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Features](#features)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Local development](#local-development)
 - [More documentation](#more-documentation) — includes [INGESTION.md](INGESTION.md) for Service Bus and ADO ingress
-
-## Installation and setup
-
-### Prerequisites
-
-- **Python** 3.12+ and **[uv](https://docs.astral.sh/uv/getting-started/installation/)**
-- Pre-provisioned **Azure Service Bus queue** and **storage account** (the worker does not create queue infrastructure)
-- Azure credentials with required RBAC roles (`az login` locally; managed identity in production)
-
-### Development / local installation
-
-1. **Clone** the repository and install dependencies:
-
-```bash
-uv sync --dev
-```
-
-2. **Configure the worker** — copy the example config and fill in your Azure resource names:
-
-```bash
-cp data/config.yaml.example data/config.yaml
-```
-
-Edit `data/config.yaml` with your Service Bus namespace, queue name, Table Storage endpoint, and optional `scopeMapping` entries. Authenticate with `az login` (or a service principal with the RBAC roles listed in **[CONFIGURATION.md](CONFIGURATION.md)**).
-
-3. **Verify** the install:
-
-```bash
-uv run python src/main.py --help
-uv run pytest -m "not integration"
-```
-
-Optional: build and run the root **`Dockerfile`** locally to mirror production (mount config at `/config/config.yaml`):
-
-```bash
-docker build -t snyk-azure-repo-sync .
-docker run -v "$(pwd)/data/config.yaml:/config/config.yaml" snyk-azure-repo-sync
-```
-
-### Deployment / production installation
-
-Complete **[INGESTION.md](INGESTION.md)** (Service Bus queue, ADO audit stream, GitHub webhooks) **before** deploying the worker. Then follow **[Deployment](#deployment)** for the Azure Container App runbook.
-
-1. **Image:** build from this repo's **`Dockerfile`**, or pull a release image from **ghcr.io** after release workflows are enabled (see **[CONTRIBUTING.md § CI, releases, and containers](CONTRIBUTING.md#ci-releases-and-containers)**).
-2. **Managed identity:** assign **Azure Service Bus Data Owner** and **Storage Table Data Contributor** to the Container App identity (see **[CONFIGURATION.md § RBAC](CONFIGURATION.md#rbac)**).
-3. **Config mount:** mount operator YAML at `/config/config.yaml` (Azure Files).
-4. **Secrets:** inject **`SNYK_TOKEN`** and **`ADO_PAT`** via Container Apps secrets or Key Vault references — never in the image or YAML.
-5. **Entrypoint:** the container runs `python src/main.py worker run --config /config/config.yaml` (image default).
-
-## Configuration
-
-The worker loads **`data/config.yaml`** by default (or **`/config/config.yaml`** in production). Settings may be overridden by environment variables. Full reference: **[CONFIGURATION.md](CONFIGURATION.md)**.
-
-| Setting | Config key | Env override |
-| ------- | ---------- | ------------ |
-| Service Bus namespace | `serviceBus.fullyQualifiedNamespace` | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` |
-| Service Bus queue | `serviceBus.queueName` | `SERVICEBUS_QUEUE_NAME` |
-| Table Storage endpoint | `syncState.storageAccountEndpoint` | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT` |
-| Table name | `syncState.tableName` | `SYNC_STATE_TABLE_NAME` |
-| Scope mapping | `scopeMapping` | — (config file only) |
-
-See **[CONFIGURATION.md](CONFIGURATION.md)** for the full `scopeMapping` schema.
-
-## Usage
-
-Start the worker consumer:
-
-```bash
-uv run python src/main.py worker run
-```
-
-Or with an explicit config path:
-
-```bash
-uv run python src/main.py worker run --config data/config.yaml
-```
-
-### VS Code / Cursor debugging
-
-`.vscode/launch.json` includes a **Worker: run** configuration. Ensure `data/config.yaml` exists and you are logged in with `az login`.
-
-## Features
-
-- Consumes native queue messages from a pre-provisioned Service Bus queue (Event Grid JSON for ADO; raw webhook JSON for GitHub)
-- Authenticates with `DefaultAzureCredential` and Azure RBAC (no connection strings)
-- Parses provider-native message shapes and normalizes ADO audit lifecycle events into a provider-neutral model
-- Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `snykIntegrationId`, optional `defaultSnykOrgId`)
-- Syncs mapped ADO repos to Snyk: import with async job polling, configurable target removal (`deactivate` or `delete`), sync-state tracking
-- Schedules internal follow-up messages on the same queue for import polling and concurrency backpressure
-- Requires `SNYK_TOKEN` in the environment; project tagging deferred
-- Passes GitHub messages through without normalization (GitHub mapper deferred)
-
-## Testing
-
-**Unit tests** (no Azure credentials required):
-
-```bash
-uv run pytest -m "not integration"
-```
-
-**Integration tests** (require `data/config.yaml` and `az login`):
-
-```bash
-uv run pytest -m integration
-```
-
-Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for test layout and integration test setup.
-
-## Troubleshooting
-
-| Symptom | Likely cause |
-| ------- | ------------- |
-| Worker exits immediately with config error | `data/config.yaml` missing or incomplete, or `SNYK_TOKEN` unset — see **[CONFIGURATION.md](CONFIGURATION.md)** |
-| Azure authentication failure | Run `az login` locally or verify managed identity RBAC assignments |
-| Integration tests skipped | Config file missing or invalid |
-| Messages dead-lettered with `InvalidMessage` | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON |
-| Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId` |
-| Log warnings for unmapped ADO project | Add a `scopeMapping.azure-repos` entry for the project name or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 
 ## Deployment
 
 This section is the **Azure-oriented runbook** for production: sizing, managed identity, config mount, secrets, and a **[portal walkthrough](#azure-container-apps-portal-walkthrough)** for a **queue-driven worker** on **[Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/overview)**.
 
-Deploy the worker as a **Container App** (long-running `worker run` consumer) — **not** a Container App Job. Complete queue and ingress setup in **[INGESTION.md](INGESTION.md)** first. **No Bicep/Terraform** is required in this repo. Image build and release workflow: **[CONTRIBUTING.md § CI, releases, and containers](CONTRIBUTING.md#ci-releases-and-containers)**.
+Deploy the worker as a **Container App** (long-running `worker run` consumer) — **not** a Container App Job. Complete queue and ingress setup in **[INGESTION.md](INGESTION.md)** first. **No Bicep/Terraform** is required in this repo.
+
+**Container image:** pull release builds from **`ghcr.io/snyk-ps/snyk-repo-sync:<version>`** (for example `ghcr.io/snyk-ps/snyk-repo-sync:v0.1.0`, where `<version>` matches the git tag). See **[CONTRIBUTING.md § CI, releases, and containers](CONTRIBUTING.md#ci-releases-and-containers)** for build and registry auth. If you previously used a locally built tag such as `snyk-azure-repo-sync`, update your Container App image reference to the GHCR path above.
 
 ### Minimum requirements (Azure Container Apps)
 
@@ -157,6 +41,7 @@ Deploy the worker as a **Container App** (long-running `worker run` consumer) �
 | **Secrets** | **`SNYK_TOKEN`** and **`ADO_PAT`** via Key Vault references / Container Apps secrets, not the image or YAML |
 | **Identity** | Managed identity with **Azure Service Bus Data Owner** and **Storage Table Data Contributor** — see **[CONFIGURATION.md § RBAC](CONFIGURATION.md#rbac)** |
 | **Config** | Non-secret operator YAML mounted at **`/config/config.yaml`** (Azure Files) |
+| **Image** | **`ghcr.io/snyk-ps/snyk-repo-sync:<version>`** — pin a release tag or digest |
 
 ### Azure Container Apps: portal walkthrough
 
@@ -205,7 +90,7 @@ You can create the environment **inside** the Container App wizard (**Basics**) 
 
 - **Container name:** e.g. `main`
 - **Image source:** **Docker Hub or other registries** (or **Azure Container Registry** if you use ACR).
-- **Image:** build from this repo's **`Dockerfile`** locally, or after release workflows are enabled pull from **`ghcr.io/<owner>/<repository>:<tag>`** (see **[CONTRIBUTING.md § CI, releases, and containers](CONTRIBUTING.md#ci-releases-and-containers)**). Pin a **tag** or **digest**.
+- **Image:** **`ghcr.io/snyk-ps/snyk-repo-sync:<version>`** (for example `v0.1.0`). Pin a **tag** or **digest**. To build locally instead, use this repo's **`Dockerfile`** — see **[CONTRIBUTING.md § CI, releases, and containers](CONTRIBUTING.md#ci-releases-and-containers)**.
 - **CPU and memory:** e.g. **0.5 CPU**, **1.0 Gi** (matches [minimum requirements](#minimum-requirements-azure-container-apps) above).
 
 **Scaling** (or **Scale** step)
@@ -292,7 +177,7 @@ The worker emits structured logs to **stdout** (JSON-friendly operational fields
 - **Log stream:** [Container App log streaming](https://learn.microsoft.com/en-us/azure/container-apps/log-streaming) on the app resource.
 - **Log Analytics:** query workspace linked to the ACA environment; console output often appears in **`ContainerAppConsoleLogs_CL`**.
 
-For application-level troubleshooting (auth, dead-letter reasons, unmapped scopes), see **[CONFIGURATION.md § Error handling and logging](CONFIGURATION.md#error-handling-and-logging)** and [Troubleshooting](#troubleshooting) above. Dynatrace alerting is defined in `openspec/specs/observability/spec.md` and is out of scope for this runbook.
+For application-level troubleshooting (auth, dead-letter reasons, unmapped scopes), see **[CONFIGURATION.md § Error handling and logging](CONFIGURATION.md#error-handling-and-logging)** and [Troubleshooting](#troubleshooting) below. Dynatrace alerting is defined in `openspec/specs/observability/spec.md` and is out of scope for this runbook.
 
 Recommend **`PYTHONUNBUFFERED=1`** on the container for timely log shipping.
 
@@ -306,8 +191,118 @@ Recommend **`PYTHONUNBUFFERED=1`** on the container for timely log shipping.
 | **Azure authentication failure** | Managed identity enabled; **Service Bus Data Owner** and **Table Data Contributor** assigned at correct scope |
 | **Snyk or ADO auth errors** | **`SNYK_TOKEN`** and **`ADO_PAT`** secrets mapped correctly; PAT has **Code (Read)** for mapped ADO projects |
 | **No messages processed** | Queue and ingress configured per **[INGESTION.md](INGESTION.md)**; `serviceBus` settings in config match the queue; ADO audit latency (~30 min) is expected |
-| **Pull image failed** | **`ghcr.io`** visibility and registry credentials; or build and push your own image per **[CONTRIBUTING.md](CONTRIBUTING.md)** |
+| **Pull image failed** | Image **`ghcr.io/snyk-ps/snyk-repo-sync:<version>`** — check GHCR visibility and registry credentials; see **[CONTRIBUTING.md](CONTRIBUTING.md)** |
 | **Messages dead-lettered** | See [Troubleshooting](#troubleshooting) — `InvalidMessage`, `InvalidNormalization`, `ImportJobFailed` |
+
+## Configuration
+
+The worker loads **`data/config.yaml`** by default (or **`/config/config.yaml`** in production). Settings may be overridden by environment variables. Full reference: **[CONFIGURATION.md](CONFIGURATION.md)**.
+
+| Setting | Config key | Env override |
+| ------- | ---------- | ------------ |
+| Service Bus namespace | `serviceBus.fullyQualifiedNamespace` | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` |
+| Service Bus queue | `serviceBus.queueName` | `SERVICEBUS_QUEUE_NAME` |
+| Table Storage endpoint | `syncState.storageAccountEndpoint` | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT` |
+| Table name | `syncState.tableName` | `SYNC_STATE_TABLE_NAME` |
+| Scope mapping | `scopeMapping` | — (config file only) |
+
+See **[CONFIGURATION.md](CONFIGURATION.md)** for the full `scopeMapping` schema.
+
+## Usage
+
+Start the worker consumer:
+
+```bash
+uv run python src/main.py worker run
+```
+
+Or with an explicit config path:
+
+```bash
+uv run python src/main.py worker run --config data/config.yaml
+```
+
+### VS Code / Cursor debugging
+
+`.vscode/launch.json` includes a **Worker: run** configuration. Ensure `data/config.yaml` exists and you are logged in with `az login`.
+
+## Features
+
+- Consumes native queue messages from a pre-provisioned Service Bus queue (Event Grid JSON for ADO; raw webhook JSON for GitHub)
+- Authenticates with `DefaultAzureCredential` and Azure RBAC (no connection strings)
+- Parses provider-native message shapes and normalizes ADO audit lifecycle events into a provider-neutral model
+- Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `snykIntegrationId`, optional `defaultSnykOrgId`)
+- Syncs mapped ADO repos to Snyk: import with async job polling, configurable target removal (`deactivate` or `delete`), sync-state tracking
+- Schedules internal follow-up messages on the same queue for import polling and concurrency backpressure
+- Requires `SNYK_TOKEN` in the environment; project tagging deferred
+- Passes GitHub messages through without normalization (GitHub mapper deferred)
+
+## Testing
+
+**Unit tests** (no Azure credentials required):
+
+```bash
+uv run pytest -m "not integration"
+```
+
+**Integration tests** (require `data/config.yaml` and `az login`):
+
+```bash
+uv run pytest -m integration
+```
+
+Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for test layout and integration test setup.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+| ------- | ------------- |
+| Worker exits immediately with config error | `data/config.yaml` missing or incomplete, or `SNYK_TOKEN` unset — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+| Azure authentication failure | Run `az login` locally or verify managed identity RBAC assignments |
+| Integration tests skipped | Config file missing or invalid |
+| Messages dead-lettered with `InvalidMessage` | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON |
+| Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId` |
+| Log warnings for unmapped ADO project | Add a `scopeMapping.azure-repos` entry for the project name or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+
+## Local development
+
+For production deployment, see **[Deployment](#deployment)** above. Complete **[INGESTION.md](INGESTION.md)** (Service Bus queue, ADO audit stream, GitHub webhooks) before deploying the worker.
+
+### Prerequisites
+
+- **Python** 3.12+ and **[uv](https://docs.astral.sh/uv/getting-started/installation/)**
+- Pre-provisioned **Azure Service Bus queue** and **storage account** (the worker does not create queue infrastructure)
+- Azure credentials with required RBAC roles (`az login` locally; managed identity in production)
+
+### Install and configure
+
+1. **Clone** the repository and install dependencies:
+
+```bash
+uv sync --dev
+```
+
+2. **Configure the worker** — copy the example config and fill in your Azure resource names:
+
+```bash
+cp data/config.yaml.example data/config.yaml
+```
+
+Edit `data/config.yaml` with your Service Bus namespace, queue name, Table Storage endpoint, and optional `scopeMapping` entries. Authenticate with `az login` (or a service principal with the RBAC roles listed in **[CONFIGURATION.md](CONFIGURATION.md)**).
+
+3. **Verify** the install:
+
+```bash
+uv run python src/main.py --help
+uv run pytest -m "not integration"
+```
+
+Optional: build and run the root **`Dockerfile`** locally to mirror production (mount config at `/config/config.yaml`):
+
+```bash
+docker build -t snyk-repo-sync .
+docker run -v "$(pwd)/data/config.yaml:/config/config.yaml" snyk-repo-sync
+```
 
 ## More documentation
 

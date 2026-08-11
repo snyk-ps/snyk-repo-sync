@@ -1,5 +1,7 @@
 """Scope-to-Snyk org mapping loaded from operator config."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Literal
 

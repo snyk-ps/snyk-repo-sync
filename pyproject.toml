@@ -1,5 +1,5 @@
 [project]
-name = "snyk-azure-repo-sync"
+name = "snyk-repo-sync"
 version = "0.1.0"
 description = "Queue-driven worker for ADO and GitHub repository lifecycle sync with Snyk."
 readme = "README.md"

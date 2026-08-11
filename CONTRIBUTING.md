@@ -1,6 +1,6 @@
 # Contributing
 
-This document is for people who create an application from this template or change code in this repository. End users and operators should start with the [README](README.md): **[Installation and setup](README.md#installation-and-setup)** for local use, and **[Deployment](README.md#deployment)** for the Azure Container App runbook (portal steps live in README, not here).
+This document is for people who create an application from this template or change code in this repository. End users and operators should start with the [README](README.md): **[Local development](README.md#local-development)** for local use, and **[Deployment](README.md#deployment)** for the Azure Container App runbook (portal steps live in README, not here).
 
 ## Using this template
 
@@ -163,9 +163,9 @@ Pass env vars and flags your CLI expects with `docker run -e ...` or your orches
 
 **`release.yml` (Docker publish)** runs when you **push a tag** matching `v*.*.*` (for example `v1.2.3`), and only when `.github/template` is absent. It checks out the repo, logs in to **GitHub Container Registry** (`ghcr.io`) with `GITHUB_TOKEN`, builds `Dockerfile`, and **pushes** the image as:
 
-`ghcr.io/<owner>/<repository>:<tag>`
+`ghcr.io/snyk-ps/snyk-repo-sync:<tag>`
 
-using the **git tag name** as the image tag (for example `ghcr.io/my-org/my-repo:v1.2.3`; GHCR uses the repository's lowercase name). It also **creates a GitHub Release** for that tag. Mark tags with a hyphen as prereleases (see the workflow). Ensure the repository allows **GitHub Packages** and that consumers authenticate to `ghcr.io` when pulling private images.
+using the **git tag name** as the image tag (for example `ghcr.io/snyk-ps/snyk-repo-sync:v1.2.3`). It also **creates a GitHub Release** for that tag. Mark tags with a hyphen as prereleases (see the workflow). Ensure the repository allows **GitHub Packages** and that consumers authenticate to `ghcr.io` when pulling private images.
 
 **Typical flow (after you delete `.github/template` and add `VERSION`):** merge work to `main` → create and push new version tag → `release.yml` builds and pushes the Docker image to GHCR.
 
