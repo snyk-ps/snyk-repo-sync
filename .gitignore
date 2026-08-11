@@ -178,3 +178,5 @@ cython_debug/
 
 # Data
 data/*local.yaml
+data/config.yaml
+data/DESIGN.md
