@@ -26,4 +26,4 @@
 
 ## 5. OpenSpec archive
 
-- [ ] 5.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/snyk-repo-sync-rename/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive snyk-repo-sync-rename` after review and merge
+- [x] 5.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/snyk-repo-sync-rename/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive snyk-repo-sync-rename` after review and merge
