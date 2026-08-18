@@ -9,6 +9,7 @@ import yaml
 
 from config.ado_settings import AdoSettings, parse_ado_settings, require_ado_pat
 from config.errors import ConfigError
+from config.ignored_repos import IgnoredReposSettings, parse_ignored_repos_settings
 from config.scope_mapping import ScopeMappingSettings, parse_scope_mapping
 from config.snyk_settings import SnykSettings, parse_snyk_settings
 
@@ -47,6 +48,7 @@ class WorkerSettings:
     ado: AdoSettings
     scope_mapping: ScopeMappingSettings
     snyk: SnykSettings
+    ignored_repos: IgnoredReposSettings | None = None
 
 
 def _require_non_empty(value: object, label: str) -> str:
@@ -106,6 +108,7 @@ def load_worker_settings(
     scope_mapping = parse_scope_mapping(raw.get("scopeMapping"))
     snyk = parse_snyk_settings(raw.get("snyk"))
     ado = parse_ado_settings(raw.get("ado"), env)
+    ignored_repos = parse_ignored_repos_settings(raw.get("ignoredRepos"), config_path=path)
 
     return WorkerSettings(
         service_bus=ServiceBusSettings(
@@ -128,6 +131,7 @@ def load_worker_settings(
         ado=ado,
         scope_mapping=scope_mapping,
         snyk=snyk,
+        ignored_repos=ignored_repos,
     )
 
 

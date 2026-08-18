@@ -1,0 +1,34 @@
+{
+  "repos": [
+    {
+      "source": "azure-repos",
+      "owner": "snykDemoProject",
+      "name": "archived-internal-tool",
+      "reason": "Decommissioned 2025-Q4",
+      "ticket": "OPS-1234"
+    },
+    {
+      "source": "github",
+      "owner": "snyk-ps",
+      "name": "legacy-mirror",
+      "reason": "GitHub mirror — scanned elsewhere"
+    }
+  ],
+  "patterns": [
+    {
+      "id": "Disabled",
+      "filterType": "prefix",
+      "patterns": ["disabled-", "DISABLED_"]
+    },
+    {
+      "id": "Documentation",
+      "filterType": "suffix",
+      "patterns": ["-docs", "-documentation"]
+    },
+    {
+      "id": "Archived",
+      "filterType": "regex",
+      "patterns": ["^(archived|deprecated)-", "-archive$"]
+    }
+  ]
+}

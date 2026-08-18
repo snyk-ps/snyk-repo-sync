@@ -21,6 +21,7 @@ class RepositoryState:
     tag_applied: bool
     import_job_id: str
     import_status: ImportStatus
+    owner_name: str = ""
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> "RepositoryState":
@@ -35,6 +36,7 @@ class RepositoryState:
             tag_applied=bool(entity.get("tagApplied", False)),
             import_job_id=str(entity.get("importJobId", "")),
             import_status=_parse_import_status(entity.get("importStatus")),
+            owner_name=str(entity.get("ownerName", "")),
         )
 
     def to_entity(self, partition_key: str, repository_id: str) -> dict[str, Any]:
@@ -51,6 +53,7 @@ class RepositoryState:
             "tagApplied": self.tag_applied,
             "importJobId": self.import_job_id,
             "importStatus": self.import_status,
+            "ownerName": self.owner_name,
         }
 
 

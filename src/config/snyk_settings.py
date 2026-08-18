@@ -17,6 +17,7 @@ class TargetRemovalSettings:
     on_rename: RemovalMode
     on_default_branch_change: RemovalMode
     on_repo_delete: RemovalMode
+    on_ignore: RemovalMode
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
                 on_rename="deactivate",
                 on_default_branch_change="deactivate",
                 on_repo_delete="deactivate",
+                on_ignore="deactivate",
             ),
         )
     if not isinstance(raw, dict):
@@ -78,6 +80,7 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
             on_rename="deactivate",
             on_default_branch_change="deactivate",
             on_repo_delete="deactivate",
+            on_ignore="deactivate",
         )
     elif not isinstance(target_removal_raw, dict):
         raise ConfigError("snyk.targetRemoval must be a mapping")
@@ -94,6 +97,10 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
             on_repo_delete=_parse_removal_mode(
                 target_removal_raw.get("onRepoDelete"),
                 "snyk.targetRemoval.onRepoDelete",
+            ),
+            on_ignore=_parse_removal_mode(
+                target_removal_raw.get("onIgnore"),
+                "snyk.targetRemoval.onIgnore",
             ),
         )
 

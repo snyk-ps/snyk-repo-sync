@@ -13,6 +13,7 @@ def test_parse_snyk_settings_defaults() -> None:
     assert settings.target_removal.on_rename == "deactivate"
     assert settings.target_removal.on_default_branch_change == "deactivate"
     assert settings.target_removal.on_repo_delete == "deactivate"
+    assert settings.target_removal.on_ignore == "deactivate"
 
 
 def test_parse_snyk_settings_custom_values() -> None:
@@ -23,12 +24,14 @@ def test_parse_snyk_settings_custom_values() -> None:
                 "onRename": "delete",
                 "onDefaultBranchChange": "delete",
                 "onRepoDelete": "delete",
+                "onIgnore": "delete",
             },
         },
     )
 
     assert settings.max_concurrent_pending_imports == 25
     assert settings.target_removal.on_rename == "delete"
+    assert settings.target_removal.on_ignore == "delete"
 
 
 def test_parse_snyk_settings_rejects_invalid_removal_mode() -> None:

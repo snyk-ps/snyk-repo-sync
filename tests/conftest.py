@@ -25,6 +25,7 @@ def make_worker_settings(**overrides) -> WorkerSettings:
                 on_rename="deactivate",
                 on_default_branch_change="deactivate",
                 on_repo_delete="deactivate",
+                on_ignore="deactivate",
             ),
         ),
     )

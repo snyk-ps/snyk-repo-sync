@@ -27,6 +27,12 @@ syncState:
 #     - orgName: contoso
 #       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
 
+# Optional: ignore policy file (YAML or JSON, UTF-8).
+# Relative paths resolve from the directory containing this config file.
+# ignoredRepos:
+#   path: ignored-repos.yaml
+#   reconciliationIntervalMinutes: 15
+
 # Optional: Snyk lifecycle sync behaviour (defaults shown).
 # snyk:
 #   maxConcurrentPendingImports: 100
@@ -34,3 +40,4 @@ syncState:
 #     onRename: deactivate              # deactivate | delete
 #     onDefaultBranchChange: deactivate
 #     onRepoDelete: deactivate
+#     onIgnore: deactivate

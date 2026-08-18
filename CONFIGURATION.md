@@ -111,9 +111,10 @@ See `openspec/specs/scope-mapping/spec.md` for the full capability contract.
 | `targetRemoval.onRename`              | No       | `deactivate` | `deactivate` or `delete` for old target on rename                                                 |
 | `targetRemoval.onDefaultBranchChange` | No       | `deactivate` | `deactivate` or `delete` for old target on default branch change                                  |
 | `targetRemoval.onRepoDelete`          | No       | `deactivate` | `deactivate` or `delete` when provider repo is deleted                                            |
+| `targetRemoval.onIgnore`              | No       | `deactivate` | `deactivate` or `delete` when a repository matches ignore policy                                  |
 
 
-`delete` is irreversible. Default is `deactivate` for all three.
+`delete` is irreversible. Default is `deactivate` for all four removal actions.
 
 **Removal semantics:** Snyk has no target-level deactivate API. When mode is `deactivate`, the worker deactivates **every project** under the target via the v1 Projects API. When mode is `delete`, the worker deletes the target via the REST Targets API (`DELETE /rest/orgs/{org_id}/targets/{target_id}`), which removes associated projects.
 
@@ -122,6 +123,62 @@ See `openspec/specs/scope-mapping/spec.md` for the full capability contract.
 With **N** worker replicas, effective pending import capacity is approximately **N × maxConcurrentPendingImports**. Lower the limit or replica count if Snyk rate limits are hit.
 
 Project tagging (`tagApplied=true`) is deferred to a follow-up change; import job completion defines sync success in the current slice.
+
+### Ignore policy (`ignoredRepos`)
+
+When enabled, the worker skips import for ignored repositories and removes active Snyk targets per `snyk.targetRemoval.onIgnore`. Policy is evaluated immediately on every lifecycle event and re-checked by a background reconciliation loop (default every 15 minutes).
+
+| Key | Required | Default | Description |
+| --- | -------- | ------- | ----------- |
+| `path` | Yes (when section present) | — | Path to ignore policy file (`.yaml`, `.yml`, or `.json`). Relative paths resolve from the directory containing `config.yaml`. |
+| `reconciliationIntervalMinutes` | No | `15` | Background reconciliation interval in minutes |
+
+Example operator config:
+
+```yaml
+ignoredRepos:
+  path: ignored-repos.yaml
+  reconciliationIntervalMinutes: 15
+```
+
+Mount the policy file on the **same Azure Files share** as `config.yaml` (for example `/config/ignored-repos.yaml`). See `data/ignored-repos.yaml` and `data/ignored-repos.json` for examples.
+
+The policy file is read as **UTF-8** and supports **YAML or JSON** (detected by file extension).
+
+#### Explicit repositories (`repos`)
+
+Each entry MUST include:
+
+| Field | Values | Meaning |
+| ----- | ------ | ------- |
+| `source` | `azure-repos`, `github` | Provider/integration type |
+| `owner` | string | ADO project name or GitHub org login |
+| `name` | string | Repository name |
+
+Additional fields (for example `reason`, `ticket`) are for operator documentation only and do not affect matching.
+
+#### Name patterns (`patterns`)
+
+Grouped by operator-defined `id` (for example `Disabled`, `Documentation`). Each group has:
+
+| Field | Values | Description |
+| ----- | ------ | ----------- |
+| `filterType` | `regex`, `prefix`, `suffix` | How patterns are matched against repository name |
+| `patterns` | list of strings | One or more match strings (Python `re` syntax when `filterType` is `regex`) |
+
+A repository is ignored if **any** explicit entry matches or **any** pattern in **any** group matches the repository name.
+
+#### Enforcement
+
+| Trigger | Behavior |
+| ------- | -------- |
+| Lifecycle event (create, rename, branch change) | Evaluate immediately; skip import; remove active target per `onIgnore` |
+| Background reconciliation | Reload policy file; remove stale active targets matching policy |
+| Policy reload failure | Log error; continue with last persisted policy from sync state |
+
+When `ignoredRepos.path` is unset, ignore enforcement is disabled. When set and the file is missing at worker startup, the worker exits with a configuration error.
+
+See `openspec/specs/ignored-repos/spec.md` for the full capability contract.
 
 ### Environment overrides
 

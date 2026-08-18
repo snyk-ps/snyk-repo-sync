@@ -43,6 +43,7 @@ def _deps(
                 on_rename="deactivate",
                 on_default_branch_change="deactivate",
                 on_repo_delete="deactivate",
+                on_ignore="deactivate",
             ),
         ),
     )

@@ -13,6 +13,8 @@ from config.scope_mapping import (
     resolve_integration_settings,
     resolve_scope_mapping,
 )
+from config.ignored_repos import IgnoreMatch, is_ignored
+from worker.ignore_policy import IgnorePolicyState
 from ado.client import AdoClient
 from config.snyk_settings import RemovalMode, SnykSettings
 from snyk.client import ImportTarget, SnykApiError, SnykClient
@@ -67,6 +69,7 @@ class WorkerSyncDependencies:
     integration_resolver: IntegrationResolver
     scope_mapping: ScopeMappingSettings
     snyk_settings: SnykSettings
+    ignore_policy_state: IgnorePolicyState | None = None
 
 
 def process_normalized_event(
@@ -108,6 +111,16 @@ def process_normalized_event(
             event.repository_id,
         )
         return LifecycleOutcome(skip_reason="duplicate_event")
+
+    ignore_match = _evaluate_ignore_policy(event, deps=deps)
+    if ignore_match is not None:
+        return _handle_ignored_event(
+            event,
+            state=state,
+            resolution=resolution,
+            deps=deps,
+            ignore_match=ignore_match,
+        )
 
     if event.event_type == "repo.deleted":
         return _handle_repo_deleted(event, state, resolution=resolution, deps=deps)
@@ -377,6 +390,7 @@ def process_import_poll(
         tag_applied=False,
         import_job_id=import_job_id,
         import_status="complete",
+        owner_name=existing.owner_name or ado_project_name,
     )
     deps.sync_state.upsert_repository(
         final_state,
@@ -411,6 +425,105 @@ def process_lifecycle_deferred(
     if isinstance(resolution, UnmappedScope):
         return LifecycleOutcome(skip_reason="unmapped_scope")
     return process_normalized_event(event, resolution, deps=deps)
+
+
+def _evaluate_ignore_policy(
+    event: NormalizedEvent,
+    *,
+    deps: WorkerSyncDependencies,
+) -> IgnoreMatch | None:
+    if deps.ignore_policy_state is None or deps.ignore_policy_state.policy is None:
+        return None
+    owner = event.ado.project_name
+    return is_ignored(
+        deps.ignore_policy_state.policy,
+        event_source=event.source,
+        owner=owner,
+        repo_name=event.repository.name,
+    )
+
+
+def _handle_ignored_event(
+    event: NormalizedEvent,
+    *,
+    state: RepositoryState | None,
+    resolution: ResolvedScopeMapping,
+    deps: WorkerSyncDependencies,
+    ignore_match: IgnoreMatch,
+) -> LifecycleOutcome:
+    logger.info(
+        "Ignored repository lifecycle event skipped source=%s scope_id=%s repository_id=%s "
+        "repository_name=%s event_type=%s match_kind=%s match_reason=%s outcome=ignored",
+        event.source,
+        event.scope_id,
+        event.repository_id,
+        event.repository.name,
+        event.event_type,
+        ignore_match.kind,
+        ignore_match.reason,
+    )
+
+    lookup = target_lookup_for_event(event, state)
+    stored_id = state.snyk_target_id if state else ""
+    target_id = ensure_snyk_target_id(
+        resolution.snyk_org_id,
+        stored_id=stored_id,
+        lookup=lookup,
+        snyk=deps.snyk,
+    )
+    mode = deps.snyk_settings.target_removal.on_ignore
+    if target_id:
+        try:
+            _apply_target_removal(
+                org_id=resolution.snyk_org_id,
+                target_id=target_id,
+                mode=mode,
+                deps=deps,
+            )
+        except SnykApiError as exc:
+            logger.error(
+                "Target removal failed for ignored repository source=%s scope_id=%s "
+                "repository_id=%s target_id=%s mode=%s error=%s outcome=target_removal_failed",
+                event.source,
+                event.scope_id,
+                event.repository_id,
+                target_id,
+                mode,
+                exc,
+            )
+            return LifecycleOutcome(
+                settlement="dead_letter",
+                dead_letter_reason=IMPORT_JOB_FAILED_REASON,
+                dead_letter_description="Snyk target removal failed for ignored repository",
+            )
+
+    if state is None:
+        return LifecycleOutcome(skip_reason="ignored")
+
+    inactive_state = RepositoryState(
+        repo_name=event.repository.name,
+        snyk_target_id="" if mode == "delete" else (target_id or state.snyk_target_id),
+        default_branch=state.default_branch or default_branch_for_event(event),
+        status="inactive" if target_id or state.import_status == "complete" else state.status,
+        desired_state_hash=compute_desired_state_hash(
+            event_type=event.event_type,
+            repo_name=event.repository.name,
+            default_branch=state.default_branch or default_branch_for_event(event),
+            status="inactive" if target_id or state.import_status == "complete" else state.status,
+        ),
+        last_event_id=event.event_id,
+        tag_applied=False,
+        import_job_id=state.import_job_id,
+        import_status=state.import_status if state.import_status == "pending" else "complete",
+        owner_name=event.ado.project_name,
+    )
+    deps.sync_state.upsert_repository(
+        inactive_state,
+        source=event.source,
+        scope_id=event.scope_id,
+        repository_id=event.repository_id,
+    )
+    return LifecycleOutcome(skip_reason="ignored")
 
 
 def _handle_repo_deleted(
@@ -481,6 +594,7 @@ def _handle_repo_deleted(
         tag_applied=False,
         import_job_id=state.import_job_id if state else "",
         import_status="failed" if state and state.import_status == "pending" else "complete",
+        owner_name=event.ado.project_name,
     )
     deps.sync_state.upsert_repository(
         inactive_state,
@@ -560,6 +674,7 @@ def _start_import(
         tag_applied=False,
         import_job_id=job_id,
         import_status="pending",
+        owner_name=event.ado.project_name,
     )
     deps.sync_state.upsert_repository(
         pending_state,
@@ -737,6 +852,7 @@ def _failed_state_from_existing(
         tag_applied=False,
         import_job_id=import_job_id,
         import_status="failed",
+        owner_name=existing.owner_name,
     )
 
 

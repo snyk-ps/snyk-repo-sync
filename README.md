@@ -79,8 +79,8 @@ Use a **Container App** (continuous worker), not a Container App Job. The steps 
 3. **Advanced:** ensure **Allow storage account key access** stays **enabled** if you will use the **account key** for the ACA file share link (common for SMB).
 4. Create the account, then open it.
 5. Under **Data storage** → **File shares** → **+ File share:** create a share (e.g. `snyk-repo-sync-config`).
-6. Open the share → **Upload** your `config.yaml` (non-secret policy only — `serviceBus`, `syncState`, `ado`, `scopeMapping`, etc.).
-  The object in the share must end up as `config.yaml` at the **root** of the share so the mounted path `/config/config.yaml` is correct.
+6. Open the share → **Upload** your `config.yaml` (non-secret policy only — `serviceBus`, `syncState`, `ado`, `scopeMapping`, etc.) and, when using ignore policy, `ignored-repos.yaml` (or `.json`) referenced by `ignoredRepos.path`.
+  Both files must sit at the **root** of the share so mounted paths `/config/config.yaml` and `/config/ignored-repos.yaml` are correct.
 7. Under **Security + networking** → **Access keys:** copy **key1** (or **key2**) — you'll paste it when wiring the environment **Volume mount**.
 
 **Networking:** If the storage account uses a **restricted firewall** or **public network access** disabled, SMB mounts from Container Apps can fail (for example `VolumeMountFailure` / `mount error(13): Permission denied`). The account must be **reachable** from your Container Apps environment. See [Use storage mounts in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/storage-mounts).

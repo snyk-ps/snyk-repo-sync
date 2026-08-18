@@ -1,11 +1,20 @@
 """Azure Table Storage client for sync-state access."""
 
+import json
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from azure.core.exceptions import ResourceNotFoundError
 from azure.data.tables import TableClient, TableServiceClient
 from azure.identity import DefaultAzureCredential
 
+from config.ignored_repos import (
+    IGNORE_POLICY_META_PARTITION,
+    IGNORE_POLICY_META_ROW_KEY,
+    IgnorePolicy,
+    ignore_policy_from_dict,
+    ignore_policy_to_dict,
+)
 from config.settings import SyncStateSettings
 from sync_state.entities import RepositoryState, repository_partition_key
 
@@ -27,6 +36,16 @@ def _default_table_service_client_factory(
     credential: Any,
 ) -> TableServiceClient:
     return TableServiceClient(endpoint=endpoint, credential=credential)
+
+
+@dataclass(frozen=True)
+class ActiveRepositoryRow:
+    """Active synced repository row for ignore reconciliation."""
+
+    source: str
+    scope_id: str
+    repository_id: str
+    state: RepositoryState
 
 
 class SyncStateStore:
@@ -103,3 +122,50 @@ class SyncStateStore:
         for _ in self._table().query_entities(query_filter=filter_query, select=["PartitionKey"]):
             count += 1
         return count
+
+    def persist_ignore_policy(self, policy: IgnorePolicy) -> None:
+        """Persist loaded ignore policy to the sync-state meta row."""
+        entity = {
+            "PartitionKey": IGNORE_POLICY_META_PARTITION,
+            "RowKey": IGNORE_POLICY_META_ROW_KEY,
+            "policyJson": json.dumps(ignore_policy_to_dict(policy)),
+        }
+        self._table().upsert_entity(entity=entity, mode="replace")
+
+    def load_persisted_ignore_policy(self) -> IgnorePolicy | None:
+        """Return the last persisted ignore policy, if any."""
+        try:
+            entity = self._table().get_entity(
+                partition_key=IGNORE_POLICY_META_PARTITION,
+                row_key=IGNORE_POLICY_META_ROW_KEY,
+            )
+        except ResourceNotFoundError:
+            return None
+        raw_json = entity.get("policyJson")
+        if not isinstance(raw_json, str) or not raw_json.strip():
+            return None
+        try:
+            document = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return None
+        return ignore_policy_from_dict(document)
+
+    def list_active_repositories(self) -> list[ActiveRepositoryRow]:
+        """Return repository rows with completed imports and active status."""
+        filter_query = "importStatus eq 'complete' and status eq 'active'"
+        rows: list[ActiveRepositoryRow] = []
+        for entity in self._table().query_entities(query_filter=filter_query):
+            partition_key = str(entity.get("PartitionKey", ""))
+            repository_id = str(entity.get("RowKey", ""))
+            if partition_key.startswith("_") or ":" not in partition_key:
+                continue
+            source, scope_id = partition_key.split(":", 1)
+            rows.append(
+                ActiveRepositoryRow(
+                    source=source,
+                    scope_id=scope_id,
+                    repository_id=repository_id,
+                    state=RepositoryState.from_entity(entity),
+                ),
+            )
+        return rows

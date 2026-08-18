@@ -1,0 +1,34 @@
+# Ignore policy (UTF-8). Mount alongside config.yaml on Azure Files.
+# Explicit entries: owner = ADO project name or GitHub org login.
+# Extra fields (e.g. reason, ticket) are for operators only — not used in matching.
+
+repos:
+  - source: azure-repos
+    owner: snykDemoProject
+    name: archived-internal-tool
+    reason: "Decommissioned 2025-Q4"
+    ticket: "OPS-1234"
+
+  - source: github
+    owner: snyk-ps
+    name: legacy-mirror
+    reason: "GitHub mirror — scanned elsewhere"
+
+patterns:
+  - id: Disabled
+    filterType: prefix
+    patterns:
+      - "disabled-"
+      - "DISABLED_"
+
+  - id: Documentation
+    filterType: suffix
+    patterns:
+      - "-docs"
+      - "-documentation"
+
+  - id: Archived
+    filterType: regex
+    patterns:
+      - "^(archived|deprecated)-"
+      - "-archive$"

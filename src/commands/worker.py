@@ -17,7 +17,9 @@ from snyk.client import SnykClient
 from snyk.integration_resolver import IntegrationResolver
 from sync_state import SyncStateStore
 from worker.consumer import WorkerConsumer
+from worker.ignore_policy import IgnorePolicyState
 from worker.lifecycle import WorkerSyncDependencies
+from worker.reconciliation import IgnoreReconciliationLoop
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,20 @@ def run_worker(args: argparse.Namespace) -> int:
         organization=settings.ado.organization,
         host=settings.ado.host,
     )
+    policy_state: IgnorePolicyState | None = None
+    if settings.ignored_repos is not None:
+        policy_state = IgnorePolicyState()
+        try:
+            policy_state.load_from_file(settings.ignored_repos.policy_path, sync_state)
+        except ConfigError as exc:
+            logger.error("%s", exc)
+            return 1
+        logger.info(
+            "Ignore policy loaded path=%s reconciliation_interval_minutes=%s",
+            settings.ignored_repos.policy_path,
+            settings.ignored_repos.reconciliation_interval_minutes,
+        )
+
     sync_deps = WorkerSyncDependencies(
         sync_state=sync_state,
         snyk=snyk_client,
@@ -72,12 +88,27 @@ def run_worker(args: argparse.Namespace) -> int:
         integration_resolver=IntegrationResolver(snyk_client),
         scope_mapping=settings.scope_mapping,
         snyk_settings=settings.snyk,
+        ignore_policy_state=policy_state,
     )
+
+    reconciliation_loop: IgnoreReconciliationLoop | None = None
+    if settings.ignored_repos is not None and policy_state is not None:
+        reconciliation_loop = IgnoreReconciliationLoop(
+            settings=settings.ignored_repos,
+            policy_state=policy_state,
+            sync_state=sync_state,
+            deps=sync_deps,
+        )
+        reconciliation_loop.start()
+
     consumer = WorkerConsumer(settings, sync_state, sync_deps=sync_deps, credential=credential)
     try:
         consumer.run()
     except KeyboardInterrupt:
         logger.info("Worker stopped")
+    finally:
+        if reconciliation_loop is not None:
+            reconciliation_loop.stop()
     return 0
 
 
