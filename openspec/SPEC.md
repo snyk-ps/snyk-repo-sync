@@ -8,7 +8,7 @@ Canonical specifications for this project. Each capability has a dedicated spec 
 | event-ingestion | `openspec/specs/event-ingestion/spec.md` | Deliver ADO Event Grid JSON and GitHub webhook JSON to a single Service Bus queue; no transport envelope; lifecycle normalization owned by the worker. |
 | github-provisioning | `openspec/specs/github-provisioning/spec.md` | Provision GitHub organization webhooks so repository lifecycle events reach the webhook ingress endpoint. |
 | github-webhook-ingestion | `openspec/specs/github-webhook-ingestion/spec.md` | Receive GitHub organization repository webhooks on customer-owned ingress, validate authenticity, deduplicate deliveries, and publish raw webhook JSON to the Service Bus queue. |
-| ignored-repos | `openspec/specs/ignored-repos/spec.md` | Ignore-list and name-prefix regex policy with scheduled deactivation of matching Snyk targets. |
+| ignored-repos | `openspec/specs/ignored-repos/spec.md` | Ignore-policy file (YAML/JSON) with explicit repos and name patterns; event-time enforcement and background reconciliation. |
 | observability | `openspec/specs/observability/spec.md` | Structured logging to Dynatrace and alerting on dead-letter queue and unrecoverable failures. |
 | repo-lifecycle | `openspec/specs/repo-lifecycle/spec.md` | Event-to-action handlers for repository create, rename, default branch change, and delete across ADO and GitHub sources. |
 | snyk-target-sync | `openspec/specs/snyk-target-sync/spec.md` | Snyk Import, target deactivation, project tagging, import-job polling, and rate-limit backoff for ADO and GitHub repository lifecycle sync. |

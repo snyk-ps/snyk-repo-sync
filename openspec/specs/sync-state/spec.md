@@ -39,11 +39,15 @@ After successful import, `importJobId` MUST be retained on the repository row fo
 - **THEN** the row is upserted with `importStatus=failed` and the current `importJobId`
 
 ### Requirement: Ignore list persistence
-When the ignore-list JSON file is successfully retrieved, its contents MUST be persisted in state for use by the worker and scheduled ignore job.
+When the ignore-policy file is successfully loaded, its parsed contents MUST be persisted in sync state for use by the worker and background reconciliation loop.
 
-#### Scenario: Ignore list refresh
-- **WHEN** the scheduled job reads an updated ignore-list JSON file
-- **THEN** the persisted ignore list in state is updated
+#### Scenario: Ignore policy refresh
+- **WHEN** the reconciliation loop reads an updated ignore-policy file
+- **THEN** the persisted ignore policy in sync state is updated
+
+#### Scenario: Initial policy load at startup
+- **WHEN** the worker starts with `ignoredRepos.path` configured and the policy file loads successfully
+- **THEN** the parsed policy is persisted to sync state before message processing begins
 
 ### Requirement: RBAC authentication
 Sync state access MUST authenticate to Azure Table Storage using `DefaultAzureCredential`. The application MUST NOT use storage account keys, connection strings, or shared access signatures.

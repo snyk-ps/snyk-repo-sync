@@ -17,7 +17,9 @@ For GitHub events, the service MUST map GitHub Org → Snyk Org (1:1), GitHub Re
 - **THEN** a Snyk target is created under the mapped org/integration and the GitHub repository ID is applied as a project tag
 
 ### Requirement: Deactivate over delete
-Target removal mode MUST be configurable in operator config under `snyk.targetRemoval` for repository rename, default branch change, and repository deletion. Allowed values: `deactivate` or `delete`. Default MUST be `deactivate` when unset.
+Target removal mode MUST be configurable in operator config under `snyk.targetRemoval` for repository rename, default branch change, repository deletion, and ignored-repository enforcement. Allowed values: `deactivate` or `delete`. Default MUST be `deactivate` when unset.
+
+Keys: `onRename`, `onDefaultBranchChange`, `onRepoDelete`, and `onIgnore`.
 
 When removal mode is `deactivate`, the integration MUST deactivate every Snyk project associated with the target via the v1 Projects API (`POST /v1/org/{orgId}/project/{projectId}/deactivate`). When removal mode is `delete`, the integration MUST delete the target via the REST Targets API (`DELETE /rest/orgs/{org_id}/targets/{target_id}`).
 
@@ -37,7 +39,7 @@ Re-import flows (rename, default branch change) MUST resolve the old target id, 
 
 #### Scenario: Default removal mode
 - **WHEN** `snyk.targetRemoval` is absent
-- **THEN** rename, default branch change, and repo delete all use target deactivation
+- **THEN** rename, default branch change, repo delete, and ignore enforcement all use target deactivation
 
 #### Scenario: Delete on repo removal
 - **WHEN** `snyk.targetRemoval.onRepoDelete` is `delete` and a repo-deleted event is processed
@@ -50,6 +52,14 @@ Re-import flows (rename, default branch change) MUST resolve the old target id, 
 #### Scenario: Deactivate before re-import on default branch change
 - **WHEN** `snyk.targetRemoval.onDefaultBranchChange` is `deactivate` and a default-branch-changed event with a prior default branch is processed
 - **THEN** the old Snyk target is deactivated before re-import on the new default branch
+
+#### Scenario: Ignored repo with active target
+- **WHEN** ignore policy matches a repository with an active synced target
+- **THEN** the target is removed per `snyk.targetRemoval.onIgnore`
+
+#### Scenario: Delete on ignore match
+- **WHEN** `snyk.targetRemoval.onIgnore` is `delete` and a repository matches ignore policy with an active target
+- **THEN** the Snyk target is hard-deleted and repository state reflects inactive status
 
 ### Requirement: No ignore migration
 When deactivating and re-importing (rename or default branch change), issue ignores MUST NOT be migrated; this matches Repo Content Sync rename limitations.
