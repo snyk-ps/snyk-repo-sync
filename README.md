@@ -225,6 +225,7 @@ Recommend `PYTHONUNBUFFERED=1` on the container for timely log shipping.
 | **No messages processed**                  | Queue and ingress configured per **[INGESTION.md](INGESTION.md)**; `serviceBus` settings in config match the queue; ADO audit latency (~30 min) is expected                                                                                       |
 | **Pull image failed**                      | Image `ghcr.io/snyk-ps/snyk-repo-sync:<version>` — check GHCR visibility and registry credentials; see **[CONTRIBUTING.md](CONTRIBUTING.md)**                                                                                                     |
 | **Messages dead-lettered**                 | See [Troubleshooting](#troubleshooting) — `InvalidMessage`, `InvalidNormalization`, `ImportJobFailed`                                                                                                                                             |
+| **Restart loop / exit code 0 on idle queue** | Upgrade to **`v1.1.0`** or later (fixes worker exiting when the queue is empty); see `serviceBus.receiveMaxWaitSeconds` in **[CONFIGURATION.md](CONFIGURATION.md)**                                                                                |
 
 
 
@@ -238,6 +239,7 @@ The worker loads `data/config.yaml` by default (or `/config/config.yaml` in prod
 | ---------------------- | ------------------------------------ | -------------------------------------- |
 | Service Bus namespace  | `serviceBus.fullyQualifiedNamespace` | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` |
 | Service Bus queue      | `serviceBus.queueName`               | `SERVICEBUS_QUEUE_NAME`                |
+| Receive poll interval  | `serviceBus.receiveMaxWaitSeconds`   | `SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS`  |
 | Table Storage endpoint | `syncState.storageAccountEndpoint`   | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT`  |
 | Table name             | `syncState.tableName`                | `SYNC_STATE_TABLE_NAME`                |
 | Scope mapping          | `scopeMapping`                       | — (config file only)                   |

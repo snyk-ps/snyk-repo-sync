@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
+from config.settings import ServiceBusSettings
 from tests.conftest import make_worker_settings
-from worker.consumer import _message_body, process_message
+from worker.consumer import WorkerConsumer, _message_body, process_message
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "fixtures"
 SETTINGS = make_worker_settings()
@@ -121,3 +124,57 @@ def test_process_message_dead_letters_invalid_normalization() -> None:
     kwargs = receiver.dead_letter_message.call_args.kwargs
     assert kwargs["reason"] == "InvalidNormalization"
     receiver.complete_message.assert_not_called()
+
+
+class _StopPollingForTest(Exception):
+    """Stop the consumer run loop during tests."""
+
+
+def test_run_continues_polling_when_queue_is_idle() -> None:
+    settings = make_worker_settings(
+        service_bus=ServiceBusSettings(
+            fully_qualified_namespace="example.servicebus.windows.net",
+            queue_name="repo-sync-events",
+            receive_max_wait_seconds=5,
+        ),
+    )
+    sync_state = MagicMock()
+    sync_state.table_name = "SnykSyncState"
+
+    poll_calls = {"count": 0}
+
+    def receive_messages(*, max_message_count: int, max_wait_time: int):
+        poll_calls["count"] += 1
+        assert max_message_count == 1
+        assert max_wait_time == 5
+        if poll_calls["count"] >= 3:
+            raise _StopPollingForTest
+        return []
+
+    receiver = MagicMock()
+    receiver.receive_messages = receive_messages
+    receiver.__enter__ = MagicMock(return_value=receiver)
+    receiver.__exit__ = MagicMock(return_value=False)
+
+    sender = MagicMock()
+    sender.__enter__ = MagicMock(return_value=sender)
+    sender.__exit__ = MagicMock(return_value=False)
+
+    client = MagicMock()
+    client.get_queue_receiver.return_value = receiver
+    client.get_queue_sender.return_value = sender
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+
+    consumer = WorkerConsumer(
+        settings,
+        sync_state,
+        credential=object(),
+        client_factory=lambda **kwargs: client,
+    )
+
+    with pytest.raises(_StopPollingForTest):
+        consumer.run()
+
+    assert poll_calls["count"] == 3
+    client.get_queue_receiver.assert_called_once_with("repo-sync-events")

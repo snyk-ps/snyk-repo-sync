@@ -23,6 +23,7 @@ cp data/config.yaml.example data/config.yaml
 | ------------------------------------ | -------- | --------------- | ------------------------------------------------------------------------------------------------------- |
 | `serviceBus.fullyQualifiedNamespace` | Yes      | —               | Service Bus namespace FQDN, e.g. `mynamespace.servicebus.windows.net`                                   |
 | `serviceBus.queueName`               | Yes      | —               | Pre-provisioned queue name                                                                              |
+| `serviceBus.receiveMaxWaitSeconds`   | No       | `5`             | Maximum seconds to wait for a message on each receive poll; does **not** stop the worker when the queue is idle |
 | `syncState.storageAccountEndpoint`   | Yes      | —               | Table service URL, e.g. `https://myaccount.table.core.windows.net`                                      |
 | `syncState.tableName`                | No       | `SnykSyncState` | Sync-state table name                                                                                   |
 | `ado.organization`                   | Yes      | —               | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
@@ -38,6 +39,7 @@ ado:
 serviceBus:
   fullyQualifiedNamespace: mynamespace.servicebus.windows.net
   queueName: repo-sync-events
+  # receiveMaxWaitSeconds: 5
 
 syncState:
   storageAccountEndpoint: https://myaccount.table.core.windows.net
@@ -187,6 +189,7 @@ See `openspec/specs/ignored-repos/spec.md` for the full capability contract.
 | -------------------------------------- | ------------------------------------ |
 | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | `serviceBus.fullyQualifiedNamespace` |
 | `SERVICEBUS_QUEUE_NAME`                | `serviceBus.queueName`               |
+| `SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS`  | `serviceBus.receiveMaxWaitSeconds`   |
 | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT`  | `syncState.storageAccountEndpoint`   |
 | `SYNC_STATE_TABLE_NAME`                | `syncState.tableName`                |
 

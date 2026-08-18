@@ -20,8 +20,6 @@ from worker.normalize import INVALID_NORMALIZATION_REASON, NormalizationError
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_WAIT_TIME = 5
-
 
 class QueueReceiver(Protocol):
     """Minimal receiver interface for queue message handling."""
@@ -187,14 +185,12 @@ class WorkerConsumer:
         sync_state: SyncStateStore,
         *,
         sync_deps: WorkerSyncDependencies | None = None,
-        max_wait_time: int = DEFAULT_MAX_WAIT_TIME,
         credential: Any | None = None,
         client_factory: ServiceBusClientFactory | None = None,
     ) -> None:
         self._settings = settings
         self._sync_state = sync_state
         self._sync_deps = sync_deps
-        self._max_wait_time = max_wait_time
         self._credential = credential if credential is not None else DefaultAzureCredential()
         self._client_factory = client_factory or _default_service_bus_client_factory
 
@@ -206,21 +202,26 @@ class WorkerConsumer:
             self._settings.service_bus.fully_qualified_namespace,
             self._sync_state.table_name,
         )
+        poll_seconds = self._settings.service_bus.receive_max_wait_seconds
         with self._client_factory(
             fully_qualified_namespace=self._settings.service_bus.fully_qualified_namespace,
             credential=self._credential,
         ) as client:
             with client.get_queue_receiver(
                 self._settings.service_bus.queue_name,
-                max_wait_time=self._max_wait_time,
             ) as receiver, client.get_queue_sender(
                 self._settings.service_bus.queue_name,
             ) as sender:
-                for message in receiver:
-                    process_message(
-                        message,
-                        receiver,
-                        settings=self._settings,
-                        sync_deps=self._sync_deps,
-                        scheduler=sender,
+                while True:
+                    messages = receiver.receive_messages(
+                        max_message_count=1,
+                        max_wait_time=poll_seconds,
                     )
+                    for message in messages:
+                        process_message(
+                            message,
+                            receiver,
+                            settings=self._settings,
+                            sync_deps=self._sync_deps,
+                            scheduler=sender,
+                        )

@@ -19,8 +19,12 @@ SNYK_TOKEN_ENV = "SNYK_TOKEN"
 
 SERVICEBUS_FQN_ENV = "SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"
 SERVICEBUS_QUEUE_ENV = "SERVICEBUS_QUEUE_NAME"
+SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS_ENV = "SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS"
 SYNC_STATE_ENDPOINT_ENV = "SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT"
 SYNC_STATE_TABLE_ENV = "SYNC_STATE_TABLE_NAME"
+
+DEFAULT_RECEIVE_MAX_WAIT_SECONDS = 5
+MAX_RECEIVE_MAX_WAIT_SECONDS = 300
 
 
 @dataclass(frozen=True)
@@ -29,6 +33,7 @@ class ServiceBusSettings:
 
     fully_qualified_namespace: str
     queue_name: str
+    receive_max_wait_seconds: int = DEFAULT_RECEIVE_MAX_WAIT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -55,6 +60,24 @@ def _require_non_empty(value: object, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"Missing or invalid required setting: {label}")
     return value.strip()
+
+
+def _parse_receive_max_wait_seconds(value: object, *, label: str) -> int:
+    if value is None:
+        return DEFAULT_RECEIVE_MAX_WAIT_SECONDS
+    if isinstance(value, bool):
+        raise ConfigError(f"Missing or invalid required setting: {label}")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise ConfigError(f"Missing or invalid required setting: {label}")
+    if parsed < 1 or parsed > MAX_RECEIVE_MAX_WAIT_SECONDS:
+        raise ConfigError(
+            f"{label} must be an integer between 1 and {MAX_RECEIVE_MAX_WAIT_SECONDS}, got {parsed!r}"
+        )
+    return parsed
 
 
 def load_worker_settings(
@@ -98,6 +121,14 @@ def load_worker_settings(
 
     fqn = env.get(SERVICEBUS_FQN_ENV, service_bus_raw.get("fullyQualifiedNamespace"))
     queue_name = env.get(SERVICEBUS_QUEUE_ENV, service_bus_raw.get("queueName"))
+    receive_max_wait_raw = env.get(
+        SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS_ENV,
+        service_bus_raw.get("receiveMaxWaitSeconds"),
+    )
+    receive_max_wait_seconds = _parse_receive_max_wait_seconds(
+        receive_max_wait_raw,
+        label=f"serviceBus.receiveMaxWaitSeconds or {SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS_ENV}",
+    )
     endpoint = env.get(
         SYNC_STATE_ENDPOINT_ENV,
         sync_state_raw.get("storageAccountEndpoint"),
@@ -120,6 +151,7 @@ def load_worker_settings(
                 queue_name,
                 f"serviceBus.queueName or {SERVICEBUS_QUEUE_ENV}",
             ),
+            receive_max_wait_seconds=receive_max_wait_seconds,
         ),
         sync_state=SyncStateSettings(
             storage_account_endpoint=_require_non_empty(

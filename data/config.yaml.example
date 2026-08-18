@@ -11,6 +11,7 @@ ado:
 serviceBus:
   fullyQualifiedNamespace: mynamespace.servicebus.windows.net
   queueName: repo-sync-events
+  # receiveMaxWaitSeconds: 5   # optional; max seconds per receive poll (does not stop the worker)
 
 syncState:
   storageAccountEndpoint: https://myaccount.table.core.windows.net
