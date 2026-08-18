@@ -3,6 +3,7 @@
 import io
 import json
 from email.message import Message
+from urllib.parse import parse_qs, urlparse
 
 import urllib.error
 
@@ -197,6 +198,26 @@ def test_deactivate_all_projects_and_delete_target() -> None:
     assert "/rest/orgs/org-1/targets/target-1" in requests[1][1]
 
 
+def test_find_target_id_includes_exclude_empty_false() -> None:
+    def opener(request, timeout=30):
+        assert request.get_method() == "GET"
+        assert "/rest/orgs/org-1/targets" in request.full_url
+        query = parse_qs(urlparse(request.full_url).query)
+        assert query.get("exclude_empty") == ["false"]
+        return FakeHTTPResponse(200, {"data": []})
+
+    client = SnykClient("token", opener=opener)
+    assert (
+        client.find_target_id(
+            "org-1",
+            owner="proj",
+            repo_name="demo",
+            branch="main",
+        )
+        is None
+    )
+
+
 def test_find_target_id_matches_display_name() -> None:
     def opener(request, timeout=30):
         assert request.get_method() == "GET"
@@ -222,6 +243,38 @@ def test_find_target_id_matches_display_name() -> None:
     )
 
     assert target_id == "target-1"
+
+
+def test_find_target_id_matches_empty_target() -> None:
+    """Empty targets (zero projects) must be returned when exclude_empty=false."""
+
+    def opener(request, timeout=30):
+        assert request.get_method() == "GET"
+        query = parse_qs(urlparse(request.full_url).query)
+        assert query.get("exclude_empty") == ["false"]
+        return FakeHTTPResponse(
+            200,
+            {
+                "data": [
+                    {
+                        "id": "target-empty",
+                        "attributes": {
+                            "display_name": "snykDemoProject/ignored-regex-archived(main)",
+                        },
+                    }
+                ],
+            },
+        )
+
+    client = SnykClient("token", opener=opener)
+    target_id = client.find_target_id(
+        "org-1",
+        owner="snykDemoProject",
+        repo_name="ignored-regex-archived",
+        branch="main",
+    )
+
+    assert target_id == "target-empty"
 
 
 def test_list_project_ids_for_target() -> None:

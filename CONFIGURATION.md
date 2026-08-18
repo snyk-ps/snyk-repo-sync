@@ -379,6 +379,7 @@ Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryR
 - Valid ADO messages for **unmapped** scopes log a **warning** and complete without Snyk side effects
 - Valid GitHub messages are **completed** without normalization or sync side effects
 - Messages dead-letter with `ImportJobFailed` when import job polling exceeds max retries
+- Repeated `target_resolve_failed` warnings after a successful import, with the target visible in Snyk but no projects yet, usually mean the worker listed targets without `exclude_empty=false`. The Snyk REST Targets API defaults to omitting empty targets; upgrade to **`v1.1.1`** or later.
 - Logs include parsed source, normalized lifecycle fields for ADO, scope mapping outcome, and queue name.
 - Azure SDK connection/link chatter is logged at **WARNING** and above only; application loggers remain at **INFO**.
 

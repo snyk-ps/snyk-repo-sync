@@ -159,6 +159,7 @@ class SnykClient:
             "source_types": source_type,
             "display_name": normalize_repo_name(repo_name),
             "limit": "100",
+            "exclude_empty": "false",
         }
         path = f"/rest/orgs/{org_id}/targets"
         records: list[dict[str, Any]] = []

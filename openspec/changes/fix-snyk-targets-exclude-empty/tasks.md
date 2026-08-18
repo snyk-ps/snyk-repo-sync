@@ -1,16 +1,16 @@
 ## 1. Snyk client fix
 
-- [ ] 1.1 Add `exclude_empty=false` to `SnykClient.find_target_id` query parameters
-- [ ] 1.2 Unit test: assert GET `/rest/orgs/{org}/targets` request includes `exclude_empty=false`
-- [ ] 1.3 Unit test: mocked empty-target record is returned by `find_target_id`
+- [x] 1.1 Add `exclude_empty=false` to `SnykClient.find_target_id` query parameters
+- [x] 1.2 Unit test: assert GET `/rest/orgs/{org}/targets` request includes `exclude_empty=false`
+- [x] 1.3 Unit test: mocked empty-target record is returned by `find_target_id`
 
 ## 2. Documentation
 
-- [ ] 2.1 Add brief troubleshooting note to CONFIGURATION.md: `target_resolve_failed` on empty repos after successful import (Snyk API `exclude_empty` default)
+- [x] 2.1 Add brief troubleshooting note to CONFIGURATION.md: `target_resolve_failed` on empty repos after successful import (Snyk API `exclude_empty` default)
 
 ## 3. Verification
 
-- [ ] 3.1 Run unit test suite
+- [x] 3.1 Run unit test suite
 
 ## 4. Release
 
