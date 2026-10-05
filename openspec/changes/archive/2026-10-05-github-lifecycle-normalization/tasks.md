@@ -35,4 +35,4 @@
 
 ## 6. Archive
 
-- [ ] 6.1 Merge `openspec/specs/` only when archiving: run `openspec archive github-lifecycle-normalization`; do not manually merge change deltas into canonical specs during implementation
+- [x] 6.1 Merge `openspec/specs/` only when archiving: run `openspec archive github-lifecycle-normalization`; do not manually merge change deltas into canonical specs during implementation

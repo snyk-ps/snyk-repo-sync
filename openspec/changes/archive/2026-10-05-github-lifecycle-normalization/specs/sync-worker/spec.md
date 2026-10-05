@@ -190,8 +190,3 @@ The worker MUST read and write repository sync state, call the Snyk API, and rou
 - **WHEN** the worker normalizes a GitHub lifecycle message whose org login has no mapping and no default org
 - **THEN** it logs an unmapped-scope warning and completes the message without Snyk side effects
 
-## REMOVED Requirements
-
-### Requirement: GitHub queue pass-through before normalization
-**Reason:** GitHub normalization and lifecycle sync are implemented in this change.
-**Migration:** Replace expectations that valid GitHub webhook messages complete without normalization or sync side effects with GitHub raw/parsed normalization and mapped-org lifecycle scenarios in this change.

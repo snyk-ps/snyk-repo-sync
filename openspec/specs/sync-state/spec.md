@@ -10,8 +10,8 @@ Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `Par
 - **THEN** the partition key is `ado:{projectId}` and the row key is the ADO repository id
 
 #### Scenario: GitHub repository partition
-- **WHEN** repository state is stored for a GitHub org
-- **THEN** the partition key is `github:{orgId}` and the row key is the GitHub repository id
+- **WHEN** repository state is stored for a GitHub organization-owned repository
+- **THEN** the partition key is `github:{orgLogin}` where `orgLogin` is the GitHub organization login (`repository.owner.login`) and the row key is the GitHub repository id as a string
 
 ### Requirement: Repository state schema
 Each repository row MUST store: `repoName`, `snykTargetId`, `defaultBranch`, `status`, `desiredStateHash`, `lastEventId`, `tagApplied`, `importJobId`, and `importStatus`.
