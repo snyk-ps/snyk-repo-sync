@@ -1,0 +1,21 @@
+{
+  "action": "renamed",
+  "changes": {
+    "repository": {
+      "name": {
+        "from": "old-name"
+      }
+    }
+  },
+  "repository": {
+    "id": 123456789,
+    "name": "new-name",
+    "full_name": "sample-org/new-name",
+    "default_branch": "main",
+    "updated_at": "2026-10-01T12:01:00Z",
+    "owner": {
+      "login": "sample-org",
+      "type": "Organization"
+    }
+  }
+}

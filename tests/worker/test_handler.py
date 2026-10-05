@@ -123,22 +123,26 @@ def test_handle_ado_created_logs_unmapped_scope(caplog) -> None:
     assert "Unmapped scope" in caplog.text
 
 
-def test_handle_github_message_skips_scope_resolution() -> None:
+def test_handle_github_message_normalizes_and_resolves_unmapped_scope() -> None:
     body = json.dumps(
         {
             "action": "created",
             "repository": {
                 "id": 1,
                 "name": "demo",
-                "full_name": "org/demo",
+                "full_name": "sample-org/demo",
+                "default_branch": "main",
+                "updated_at": "2026-10-01T12:00:00Z",
+                "owner": {"login": "sample-org", "type": "Organization"},
             },
         }
     ).encode("utf-8")
 
     result = handle_queue_message(body)
 
-    assert result.normalized is None
-    assert result.scope_resolution is None
+    assert result.normalized is not None
+    assert result.normalized.source == "github"
+    assert isinstance(result.scope_resolution, UnmappedScope)
 
 
 def _sync_deps() -> WorkerSyncDependencies:

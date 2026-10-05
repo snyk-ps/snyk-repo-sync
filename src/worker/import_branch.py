@@ -18,4 +18,6 @@ def resolve_import_branch(
     branch = default_branch_for_state(event, existing)
     if branch:
         return branch
+    if event.source == "github":
+        raise ValueError("GitHub import requires default branch in event or sync state")
     return ado.get_repository_default_branch(event.repository_id)

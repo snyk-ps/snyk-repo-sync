@@ -16,7 +16,14 @@ from snyk.client import SnykApiError
 from worker.followup import ScheduledFollowUp
 from worker.lifecycle import LifecycleOutcome, WorkerSyncDependencies, process_import_poll, process_lifecycle_deferred, process_normalized_event
 from worker.message import InboundMessage, MessageParseError, QueueMessage, parse_inbound_message
-from worker.normalize import NormalizationError, NormalizedEvent, normalize_ado_audit_record
+from worker.normalize import (
+    GitHubNoLifecycleAction,
+    NormalizationError,
+    NormalizedEvent,
+    normalize_ado_audit_record,
+    normalize_github_queue_payload,
+    scope_lookup_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +80,32 @@ def handle_queue_message(
     )
 
     if message.source == "github":
-        logger.info("GitHub normalization deferred; completing without lifecycle processing")
-        return HandleResult(message=message)
+        try:
+            normalized = normalize_github_queue_payload(
+                message.provider_payload,
+                delivery_id=message.event_id,
+            )
+        except GitHubNoLifecycleAction as exc:
+            logger.info(
+                "GitHub message requires no lifecycle action reason=%s event_id=%s",
+                exc,
+                message.event_id,
+            )
+            return HandleResult(message=message)
+    else:
+        normalized = normalize_ado_audit_record(message.provider_payload)
 
-    normalized = normalize_ado_audit_record(message.provider_payload)
+    lookup_key = scope_lookup_key(normalized)
+    resolution = resolve_scope_mapping(
+        mapping,
+        source=normalized.source,
+        lookup_key=lookup_key,
+    )
+
     if (
         normalized.event_type == "repo.default_branch_changed"
         and "previousDefaultBranch" not in normalized.payload
+        and normalized.source == "ado"
     ):
         logger.info(
             "Default branch set with no previous default branch; no sync action needed "
@@ -93,31 +119,10 @@ def handle_queue_message(
         return HandleResult(
             message=message,
             normalized=normalized,
-            scope_resolution=resolve_scope_mapping(
-                mapping,
-                source="ado",
-                lookup_key=normalized.ado.project_name,
-            ),
+            scope_resolution=resolution,
         )
 
-    logger.info(
-        "Normalized ADO lifecycle event event_type=%s event_id=%s scope_id=%s "
-        "repository_id=%s ado_org_id=%s ado_project_name=%s repository_name=%s payload=%s",
-        normalized.event_type,
-        normalized.event_id,
-        normalized.scope_id,
-        normalized.repository_id,
-        normalized.ado.org_id,
-        normalized.ado.project_name,
-        normalized.repository.name,
-        normalized.payload,
-    )
-
-    resolution = resolve_scope_mapping(
-        mapping,
-        source="ado",
-        lookup_key=normalized.ado.project_name,
-    )
+    _log_normalized_event(normalized)
     _log_scope_resolution(normalized, resolution)
 
     if sync_deps is None or isinstance(resolution, UnmappedScope):
@@ -136,6 +141,36 @@ def handle_queue_message(
     )
 
 
+def _log_normalized_event(normalized: NormalizedEvent) -> None:
+    if normalized.source == "ado":
+        assert normalized.ado is not None
+        logger.info(
+            "Normalized ADO lifecycle event event_type=%s event_id=%s scope_id=%s "
+            "repository_id=%s ado_org_id=%s ado_project_name=%s repository_name=%s payload=%s",
+            normalized.event_type,
+            normalized.event_id,
+            normalized.scope_id,
+            normalized.repository_id,
+            normalized.ado.org_id,
+            normalized.ado.project_name,
+            normalized.repository.name,
+            normalized.payload,
+        )
+        return
+    assert normalized.github is not None
+    logger.info(
+        "Normalized GitHub lifecycle event event_type=%s event_id=%s scope_id=%s "
+        "repository_id=%s org_login=%s repository_name=%s payload=%s",
+        normalized.event_type,
+        normalized.event_id,
+        normalized.scope_id,
+        normalized.repository_id,
+        normalized.github.org_login,
+        normalized.repository.name,
+        normalized.payload,
+    )
+
+
 def _handle_internal_message(
     internal,
     *,
@@ -151,13 +186,14 @@ def _handle_internal_message(
             source_event_id=internal.source_event_id,
             import_job_id=internal.import_job_id,
             retry_count=internal.retry_count,
-            ado_project_name=internal.ado_project_name,
+            scope_lookup_key=internal.ado_project_name,
             deps=deps,
         )
         return _handle_result_from_outcome(outcome)
 
     outcome = process_lifecycle_deferred(
         {
+            "source": internal.source,
             "sourceEventId": internal.source_event_id,
             "eventType": internal.event_type or "",
             "scopeId": internal.scope_id,
@@ -202,6 +238,7 @@ def _log_scope_resolution(
     normalized: NormalizedEvent,
     resolution: ResolvedScopeMapping | UnmappedScope,
 ) -> None:
+    lookup_key = scope_lookup_key(normalized)
     if isinstance(resolution, UnmappedScope):
         logger.warning(
             "Unmapped scope source=%s lookup_key=%s event_id=%s scope_id=%s",
@@ -213,11 +250,12 @@ def _log_scope_resolution(
         return
 
     logger.info(
-        "Resolved scope mapping source=ado resolution=%s snyk_org_id=%s "
-        "event_id=%s scope_id=%s project_name=%s",
+        "Resolved scope mapping source=%s resolution=%s snyk_org_id=%s "
+        "event_id=%s scope_id=%s lookup_key=%s",
+        normalized.source,
         resolution.resolution,
         resolution.snyk_org_id,
         normalized.event_id,
         normalized.scope_id,
-        normalized.ado.project_name,
+        lookup_key,
     )

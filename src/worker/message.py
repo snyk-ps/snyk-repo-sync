@@ -98,7 +98,15 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
         )
 
     if _is_github_message(data):
-        return QueueMessage(source="github", provider_payload=data)
+        event_id: str | None = None
+        delivery_id = data.get("deliveryId")
+        if isinstance(delivery_id, str) and delivery_id.strip():
+            event_id = delivery_id.strip()
+        return QueueMessage(
+            source="github",
+            provider_payload=data,
+            event_id=event_id,
+        )
 
     raise MessageParseError("unrecognized queue message shape")
 

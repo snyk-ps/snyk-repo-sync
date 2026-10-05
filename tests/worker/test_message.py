@@ -32,6 +32,14 @@ def test_parse_github_fixture() -> None:
     assert message.provider_payload["action"] == "created"
 
 
+def test_parse_github_parsed_contract_fixture() -> None:
+    body = (FIXTURES / "github_parsed_created.json").read_text(encoding="utf-8")
+    message = parse_queue_message(body)
+    assert message.source == "github"
+    assert message.event_id == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    assert message.provider_payload["deliveryId"]
+
+
 def test_parse_invalid_json() -> None:
     with pytest.raises(MessageParseError, match="valid JSON"):
         parse_queue_message("{not-json")

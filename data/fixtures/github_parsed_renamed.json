@@ -1,0 +1,25 @@
+{
+  "deliveryId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+  "action": "renamed",
+  "changes": {
+    "repository": {
+      "name": {
+        "from": "old-name"
+      }
+    }
+  },
+  "repository": {
+    "id": 123456789,
+    "name": "new-name",
+    "fullName": "sample-org/new-name",
+    "defaultBranch": "main",
+    "updatedAt": "2026-10-01T12:01:00Z",
+    "owner": {
+      "login": "sample-org",
+      "type": "Organization"
+    }
+  },
+  "sender": {
+    "login": "octocat"
+  }
+}

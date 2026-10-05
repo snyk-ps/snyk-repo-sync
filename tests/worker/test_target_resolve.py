@@ -80,4 +80,5 @@ def test_ensure_snyk_target_id_falls_back_to_rest_lookup() -> None:
         owner="proj",
         repo_name="new-name",
         branch="",
+        source_type="azure-repos",
     )

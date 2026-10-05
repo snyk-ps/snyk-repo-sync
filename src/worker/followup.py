@@ -93,7 +93,10 @@ def build_lifecycle_deferred_message(
     payload: dict[str, str],
     retry_count: int,
 ) -> dict[str, Any]:
-    """Build a ``lifecycle_deferred`` follow-up envelope."""
+    """Build a ``lifecycle_deferred`` follow-up envelope.
+
+    ``adoProjectName`` holds the scope lookup key (ADO project or GitHub org login).
+    """
     return {
         "syncPhase": LIFECYCLE_DEFERRED_PHASE,
         "source": source,

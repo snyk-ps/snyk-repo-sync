@@ -89,7 +89,7 @@ def test_ado_create_fixture_pending_then_complete_flow() -> None:
         source_event_id="evt-1",
         import_job_id="job-1",
         retry_count=0,
-        ado_project_name="proj",
+        scope_lookup_key="proj",
         deps=deps,
     )
 

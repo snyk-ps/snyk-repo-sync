@@ -1,18 +1,20 @@
 {
-  "action": "created",
+  "action": "edited",
+  "changes": {
+    "default_branch": {
+      "from": "main",
+      "to": "develop"
+    }
+  },
   "repository": {
     "id": 123456789,
     "name": "sample-repo",
     "full_name": "sample-org/sample-repo",
-    "default_branch": "main",
-    "updated_at": "2026-10-01T12:00:00Z",
+    "default_branch": "develop",
+    "updated_at": "2026-10-01T12:03:00Z",
     "owner": {
       "login": "sample-org",
       "type": "Organization"
     }
-  },
-  "organization": {
-    "id": 987654321,
-    "login": "sample-org"
   }
 }

@@ -159,9 +159,27 @@ Supported ADO audit `ActionId` values:
 | Repository deleted | `Git.RepositoryDeleted` |
 | Default branch changed | `Git.RepositoryDefaultBranchChanged` |
 
-### GitHub (raw webhook JSON)
+### GitHub (two supported JSON shapes)
 
-GitHub webhook ingress publishes the signed webhook body directly to the queue (see `data/fixtures/github_webhook_created.json`). The worker detects GitHub by top-level `repository` and `action` fields. Normalization is deferred in the current slice.
+The worker detects GitHub by top-level `repository` and `action`. Messages are either **raw webhook JSON** (snake_case) or a **GitHubHooks parsed repository event** (camelCase repository + top-level `deliveryId`).
+
+| Shape | Detection | Idempotency `eventId` |
+| ----- | --------- | --------------------- |
+| Parsed contract | `deliveryId` present | `deliveryId` |
+| Raw webhook | no `deliveryId` | `repository.updated_at`-based fallback or ingress metadata |
+
+**Scope:** `repository.owner.login` when `owner.type` is `Organization` (sync-state partition `github:{orgLogin}`).
+
+**Actions:**
+
+| `action` | Normalized lifecycle |
+| -------- | -------------------- |
+| `created` | `repo.created` |
+| `renamed` | `repo.renamed` (`changes.repository.name.from` → previous name when present) |
+| `deleted` | `repo.deleted` |
+| `edited` | `repo.default_branch_changed` only when `changes.default_branch.from` is set; otherwise no sync |
+
+Fixtures: `data/fixtures/github_webhook_*.json`, `data/fixtures/github_parsed_*.json`.
 
 ---
 

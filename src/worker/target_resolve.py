@@ -9,14 +9,14 @@ from typing import Protocol
 from snyk.client import SnykClient
 from sync_state.entities import RepositoryState
 from worker.idempotency import default_branch_for_event, default_branch_for_state
-from worker.normalize import NormalizedEvent
+from worker.normalize import NormalizedEvent, owner_name
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class TargetLookup:
-    """Parameters used to locate a Snyk target for an ADO repository."""
+    """Parameters used to locate a Snyk target for a repository."""
 
     owner: str
     repo_name: str
@@ -33,8 +33,29 @@ class TargetResolver(Protocol):
         owner: str,
         repo_name: str,
         branch: str = "",
+        source_type: str = "azure-repos",
     ) -> str | None:
         """Return a matching Snyk target id, if one exists."""
+
+
+def rename_previous_name_resolved(
+    event: NormalizedEvent,
+    state: RepositoryState | None,
+) -> bool:
+    """Return whether the previous repository name is known for rename target lookup."""
+    if event.event_type != "repo.renamed":
+        return True
+    if event.payload.get("previousRepoName"):
+        return True
+    if state is not None and state.snyk_target_id.strip():
+        return True
+    if (
+        state is not None
+        and state.repo_name.strip()
+        and state.repo_name != event.repository.name
+    ):
+        return True
+    return False
 
 
 def target_lookup_for_event(
@@ -42,7 +63,7 @@ def target_lookup_for_event(
     state: RepositoryState | None,
 ) -> TargetLookup:
     """Build target lookup parameters from an event and optional sync state."""
-    owner = event.ado.project_name
+    owner = owner_name(event)
     if event.event_type == "repo.renamed":
         repo_name = str(
             event.payload.get("previousRepoName")
@@ -74,6 +95,7 @@ def ensure_snyk_target_id(
     stored_id: str,
     lookup: TargetLookup,
     snyk: TargetResolver,
+    source_type: str = "azure-repos",
 ) -> str | None:
     """Return a Snyk target id from sync state or REST lookup."""
     normalized = stored_id.strip()
@@ -84,6 +106,7 @@ def ensure_snyk_target_id(
         owner=lookup.owner,
         repo_name=lookup.repo_name,
         branch=lookup.branch,
+        source_type=source_type,
     )
     if target_id:
         logger.info(

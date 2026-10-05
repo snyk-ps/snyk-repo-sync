@@ -96,7 +96,7 @@ The integration type for API lookup is determined by the section key (for exampl
 
 When using `defaultSnykOrgId` without an explicit scope entry, the worker uses `azure-repos` for ADO events. For GitHub events it uses `github` unless exactly one GitHub integration type section is configured, in which case that type is used.
 
-**Lookup keys:** ADO events use `ado.projectName` from the normalized audit record. GitHub entries are loaded at startup for when GitHub normalization lands; GitHub queue messages are not normalized yet.
+**Lookup keys:** ADO events use `ado.projectName` from the normalized audit record. GitHub events use `repository.owner.login` (organization login) from the normalized webhook or parsed contract.
 
 **Unmapped scopes:** When no entry matches and `defaultSnykOrgId` is unset, the worker logs a warning and completes the message without Snyk side effects.
 
@@ -268,7 +268,7 @@ Table name defaults to `SnykSyncState`. Repository state rows use:
 
 | Key            | Value                                                    |
 | -------------- | -------------------------------------------------------- |
-| `PartitionKey` | `{source}:{scopeId}` where `source` is `ado` or `github` |
+| `PartitionKey` | `{source}:{scopeId}` — ADO `scopeId` is project id; GitHub `scopeId` is org login |
 | `RowKey`       | `{repositoryId}`                                         |
 
 
@@ -341,15 +341,19 @@ Event Grid JSON with audit record under `data`. The worker detects ADO when `eve
 
 See `data/fixtures/eventgrid_ado_*.json` and **[INGESTION.md](INGESTION.md)**.
 
-### GitHub (raw webhook JSON)
+### GitHub (raw webhook or parsed contract)
 
-Top-level webhook body with `action` and `repository`. See `data/fixtures/github_webhook_created.json`.
+Top-level JSON with `action` and `repository`. Parsed GitHubHooks events include `deliveryId` and camelCase repository fields. See `data/fixtures/github_webhook_*.json` and `data/fixtures/github_parsed_*.json`.
 
 See `openspec/specs/event-ingestion/spec.md` for the canonical contract. Step-by-step ingress setup (Service Bus, ADO audit stream, GitHub webhooks): **[INGESTION.md](INGESTION.md)**.
 
 ## Normalized lifecycle event (ADO)
 
-After parsing, the worker maps supported ADO audit records into a normalized lifecycle event, resolves scope mapping, performs Snyk lifecycle sync for mapped scopes, and completes or schedules follow-up messages. GitHub messages are completed without normalization until a follow-up change.
+After parsing, the worker maps supported ADO audit records into a normalized lifecycle event, resolves scope mapping, performs Snyk lifecycle sync for mapped scopes, and completes or schedules follow-up messages.
+
+## Normalized lifecycle event (GitHub)
+
+GitHub uses the same four `eventType` values. `scopeId` and `github.orgLogin` are the organization login (`repository.owner.login`). `eventId` is `deliveryId` on parsed contract messages. `edited` maps to default-branch change only when `changes.default_branch.from` is present.
 
 
 | Field                           | ADO audit source             | Description                                                                          |
@@ -377,7 +381,9 @@ Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryR
 - ADO audit records that are unsupported or missing required fields are **dead-lettered** with reason `InvalidNormalization`.
 - Valid ADO messages for **mapped** scopes trigger Snyk import/deactivate/delete per lifecycle event; import completion is async via scheduled follow-ups
 - Valid ADO messages for **unmapped** scopes log a **warning** and complete without Snyk side effects
-- Valid GitHub messages are **completed** without normalization or sync side effects
+- Valid GitHub messages for **mapped** orgs follow the same lifecycle and import deferral contract as ADO
+- Valid GitHub messages for **unmapped** orgs log a **warning** and complete without Snyk side effects
+- GitHub `edited` webhooks without a default-branch change complete without sync
 - Messages dead-letter with `ImportJobFailed` when import job polling exceeds max retries
 - Repeated `target_resolve_failed` warnings after a successful import, with the target visible in Snyk but no projects yet, usually mean the worker listed targets without `exclude_empty=false`. The Snyk REST Targets API defaults to omitting empty targets; upgrade to **`v1.1.1`** or later.
 - Logs include parsed source, normalized lifecycle fields for ADO, scope mapping outcome, and queue name.

@@ -1,0 +1,23 @@
+{
+  "deliveryId": "e5f6a7b8-c9d0-1234-ef01-345678901234",
+  "action": "edited",
+  "changes": {
+    "description": {
+      "from": "Old description"
+    }
+  },
+  "repository": {
+    "id": 123456789,
+    "name": "sample-repo",
+    "fullName": "sample-org/sample-repo",
+    "defaultBranch": "main",
+    "updatedAt": "2026-10-01T12:04:00Z",
+    "owner": {
+      "login": "sample-org",
+      "type": "Organization"
+    }
+  },
+  "sender": {
+    "login": "octocat"
+  }
+}

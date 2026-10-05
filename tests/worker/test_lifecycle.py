@@ -149,7 +149,7 @@ def test_import_poll_completes_and_retains_job_id() -> None:
         source_event_id="evt-1",
         import_job_id="job-1",
         retry_count=0,
-        ado_project_name="proj",
+        scope_lookup_key="proj",
         deps=deps,
     )
 
@@ -215,7 +215,7 @@ def test_import_poll_dead_letters_after_max_retries() -> None:
         source_event_id="evt-1",
         import_job_id="job-1",
         retry_count=5,
-        ado_project_name="proj",
+        scope_lookup_key="proj",
         deps=deps,
     )
 
