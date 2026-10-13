@@ -10,6 +10,7 @@ from azure.servicebus import ServiceBusClient, ServiceBusMessage
 
 from config.settings import DEFAULT_CONFIG_PATH, load_worker_settings
 from worker.consumer import WorkerConsumer, process_message
+from worker.followup_transport import ServiceBusFollowUpTransport
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "fixtures"
 
@@ -31,6 +32,8 @@ def _integration_configured() -> bool:
 def test_worker_completes_published_ado_fixture() -> None:
     config_path = os.environ.get("WORKER_CONFIG_PATH", DEFAULT_CONFIG_PATH)
     settings = load_worker_settings(config_path)
+    if settings.service_bus is None:
+        pytest.skip("Service Bus transport is not configured")
     body = (FIXTURES / "eventgrid_ado_default_branch_changed.json").read_text(encoding="utf-8")
     credential = DefaultAzureCredential()
 
@@ -46,7 +49,11 @@ def test_worker_completes_published_ado_fixture() -> None:
         with receiver:
             messages = receiver.receive_messages(max_message_count=1, max_wait_time=10)
             assert len(messages) == 1
-            process_message(messages[0], receiver)
+            process_message(
+                messages[0],
+                ServiceBusFollowUpTransport(receiver),
+                settings=settings,
+            )
 
         receiver = client.get_queue_receiver(settings.service_bus.queue_name, max_wait_time=5)
         with receiver:
@@ -58,6 +65,8 @@ def test_worker_completes_published_ado_fixture() -> None:
 def test_worker_completes_published_github_fixture() -> None:
     config_path = os.environ.get("WORKER_CONFIG_PATH", DEFAULT_CONFIG_PATH)
     settings = load_worker_settings(config_path)
+    if settings.service_bus is None:
+        pytest.skip("Service Bus transport is not configured")
     body = (FIXTURES / "github_webhook_created.json").read_text(encoding="utf-8")
     credential = DefaultAzureCredential()
 
@@ -79,7 +88,11 @@ def test_worker_completes_published_github_fixture() -> None:
             else:
                 parsed = json.loads(b"".join(message_body).decode("utf-8"))
             assert parsed["action"] == "created"
-            process_message(messages[0], receiver)
+            process_message(
+                messages[0],
+                ServiceBusFollowUpTransport(receiver),
+                settings=settings,
+            )
 
 
 @pytest.mark.skipif(not _integration_configured(), reason="Worker config not configured")
@@ -88,7 +101,10 @@ def test_worker_consumer_can_be_constructed() -> None:
 
     config_path = os.environ.get("WORKER_CONFIG_PATH", DEFAULT_CONFIG_PATH)
     settings = load_worker_settings(config_path)
+    if settings.service_bus is None:
+        pytest.skip("Service Bus transport is not configured")
     sync_state = MagicMock()
     sync_state.table_name = settings.sync_state.table_name
     consumer = WorkerConsumer(settings, sync_state, credential=object())
+    assert consumer._settings.service_bus is not None
     assert consumer._settings.service_bus.queue_name == settings.service_bus.queue_name

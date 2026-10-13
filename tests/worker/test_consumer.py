@@ -6,7 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from config.settings import ServiceBusSettings
+from config.errors import ConfigError
+from config.settings import ServiceBusSettings, StorageQueueSettings
 from tests.conftest import make_worker_settings
 from worker.consumer import WorkerConsumer, _message_body, process_message
 
@@ -20,6 +21,30 @@ class FakeMessage:
     def __init__(self, body, message_id: str = "msg-1") -> None:
         self.body = body
         self.message_id = message_id
+
+
+class FakeTransport:
+    """Records settlement calls from process_message."""
+
+    def __init__(self) -> None:
+        self.completed: list[FakeMessage] = []
+        self.dead_letters: list[tuple[FakeMessage, str, str | None]] = []
+        self.scheduled: list[tuple[dict, int]] = []
+
+    def complete(self, message: FakeMessage) -> None:
+        self.completed.append(message)
+
+    def dead_letter(
+        self,
+        message: FakeMessage,
+        *,
+        reason: str,
+        description: str | None = None,
+    ) -> None:
+        self.dead_letters.append((message, reason, description))
+
+    def schedule(self, body: dict, *, delay_seconds: int) -> None:
+        self.scheduled.append((body, delay_seconds))
 
 
 def test_message_body_joins_iterable_chunks() -> None:
@@ -48,35 +73,34 @@ def test_message_body_joins_generator_chunks() -> None:
 def test_process_message_completes_valid_ado_message() -> None:
     body = (FIXTURES / "eventgrid_ado_default_branch_changed.json").read_bytes()
     message = FakeMessage(body)
-    receiver = MagicMock()
+    transport = FakeTransport()
 
-    process_message(message, receiver, settings=SETTINGS)
+    process_message(message, transport, settings=SETTINGS)
 
-    receiver.complete_message.assert_called_once_with(message)
-    receiver.dead_letter_message.assert_not_called()
+    assert transport.completed == [message]
+    assert transport.dead_letters == []
 
 
 def test_process_message_completes_valid_github_message() -> None:
     body = (FIXTURES / "github_webhook_created.json").read_bytes()
     message = FakeMessage(body)
-    receiver = MagicMock()
+    transport = FakeTransport()
 
-    process_message(message, receiver, settings=SETTINGS)
+    process_message(message, transport, settings=SETTINGS)
 
-    receiver.complete_message.assert_called_once_with(message)
-    receiver.dead_letter_message.assert_not_called()
+    assert transport.completed == [message]
+    assert transport.dead_letters == []
 
 
 def test_process_message_dead_letters_invalid_message() -> None:
     message = FakeMessage(b"{}")
-    receiver = MagicMock()
+    transport = FakeTransport()
 
-    process_message(message, receiver, settings=SETTINGS)
+    process_message(message, transport, settings=SETTINGS)
 
-    receiver.dead_letter_message.assert_called_once()
-    kwargs = receiver.dead_letter_message.call_args.kwargs
-    assert kwargs["reason"] == "InvalidMessage"
-    receiver.complete_message.assert_not_called()
+    assert len(transport.dead_letters) == 1
+    assert transport.dead_letters[0][1] == "InvalidMessage"
+    assert transport.completed == []
 
 
 def test_process_message_completes_default_branch_changed_without_previous_branch() -> None:
@@ -102,12 +126,12 @@ def test_process_message_completes_default_branch_changed_without_previous_branc
         }
     ).encode("utf-8")
     message = FakeMessage(body)
-    receiver = MagicMock()
+    transport = FakeTransport()
 
-    process_message(message, receiver, settings=SETTINGS)
+    process_message(message, transport, settings=SETTINGS)
 
-    receiver.complete_message.assert_called_once_with(message)
-    receiver.dead_letter_message.assert_not_called()
+    assert transport.completed == [message]
+    assert transport.dead_letters == []
 
 
 def test_process_message_dead_letters_invalid_normalization() -> None:
@@ -116,14 +140,13 @@ def test_process_message_dead_letters_invalid_normalization() -> None:
         b'"data":{"ActionId":"Git.RepositoryCreated","ProjectId":"proj-1"}}'
     )
     message = FakeMessage(body)
-    receiver = MagicMock()
+    transport = FakeTransport()
 
-    process_message(message, receiver, settings=SETTINGS)
+    process_message(message, transport, settings=SETTINGS)
 
-    receiver.dead_letter_message.assert_called_once()
-    kwargs = receiver.dead_letter_message.call_args.kwargs
-    assert kwargs["reason"] == "InvalidNormalization"
-    receiver.complete_message.assert_not_called()
+    assert len(transport.dead_letters) == 1
+    assert transport.dead_letters[0][1] == "InvalidNormalization"
+    assert transport.completed == []
 
 
 class _StopPollingForTest(Exception):
@@ -178,3 +201,27 @@ def test_run_continues_polling_when_queue_is_idle() -> None:
 
     assert poll_calls["count"] == 3
     client.get_queue_receiver.assert_called_once_with("repo-sync-events")
+
+
+def test_run_kafka_does_not_construct_service_bus_client() -> None:
+    settings = make_worker_settings(
+        transport="kafka",
+        service_bus=None,
+        storage_queue=StorageQueueSettings(
+            queue_service_url="https://example.queue.core.windows.net",
+            queue_name="repo-sync-followups",
+            poison_queue_name="repo-sync-followups-poison",
+        ),
+    )
+    factory = MagicMock()
+    consumer = WorkerConsumer(
+        settings,
+        MagicMock(),
+        credential=object(),
+        client_factory=factory,
+    )
+
+    with pytest.raises(ConfigError, match="REST API contract is pending"):
+        consumer.run()
+
+    factory.assert_not_called()

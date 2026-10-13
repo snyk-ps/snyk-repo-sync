@@ -17,6 +17,7 @@ from snyk.client import SnykClient
 from snyk.integration_resolver import IntegrationResolver
 from sync_state import SyncStateStore
 from worker.consumer import WorkerConsumer
+from worker.event_source import open_github_event_source
 from worker.ignore_policy import IgnorePolicyState
 from worker.lifecycle import WorkerSyncDependencies
 from worker.reconciliation import IgnoreReconciliationLoop
@@ -47,6 +48,8 @@ def run_worker(args: argparse.Namespace) -> int:
     configure_logging()
     try:
         settings = load_worker_settings(args.config)
+        if settings.transport == "kafka":
+            open_github_event_source()
         snyk_token = require_snyk_token()
         ado_pat = require_ado_pat()
     except ConfigError as exc:

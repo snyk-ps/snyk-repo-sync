@@ -7,10 +7,15 @@ import yaml
 
 from config.settings import (
     DEFAULT_TABLE_NAME,
+    MESSAGING_TRANSPORT_ENV,
     SERVICEBUS_FQN_ENV,
     SERVICEBUS_QUEUE_ENV,
     SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS_ENV,
     SNYK_TOKEN_ENV,
+    STORAGE_QUEUE_NAME_ENV,
+    STORAGE_QUEUE_POISON_NAME_ENV,
+    STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS_ENV,
+    STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS_ENV,
     SYNC_STATE_ENDPOINT_ENV,
     SYNC_STATE_TABLE_ENV,
     ConfigError,
@@ -45,6 +50,9 @@ def test_load_worker_settings_success(tmp_path: Path) -> None:
 
     settings = load_worker_settings(path)
 
+    assert settings.transport == "serviceBus"
+    assert settings.storage_queue is None
+    assert settings.service_bus is not None
     assert settings.service_bus.fully_qualified_namespace == "example.servicebus.windows.net"
     assert settings.service_bus.queue_name == "repo-sync-events"
     assert settings.service_bus.receive_max_wait_seconds == 5
@@ -134,6 +142,7 @@ def test_load_worker_settings_env_overrides_config(tmp_path: Path) -> None:
         },
     )
 
+    assert settings.service_bus is not None
     assert settings.service_bus.fully_qualified_namespace == "env.servicebus.windows.net"
     assert settings.service_bus.queue_name == "env-queue"
     assert settings.sync_state.storage_account_endpoint == "https://env.table.core.windows.net"
@@ -210,6 +219,7 @@ def test_load_worker_settings_receive_max_wait_seconds_from_config(tmp_path: Pat
 
     settings = load_worker_settings(path)
 
+    assert settings.service_bus is not None
     assert settings.service_bus.receive_max_wait_seconds == 15
 
 
@@ -230,6 +240,7 @@ def test_load_worker_settings_receive_max_wait_seconds_env_override(tmp_path: Pa
 
     settings = load_worker_settings(path, {SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS_ENV: "30"})
 
+    assert settings.service_bus is not None
     assert settings.service_bus.receive_max_wait_seconds == 30
 
 
@@ -262,3 +273,118 @@ def test_load_worker_settings_rejects_invalid_receive_max_wait_seconds(
 
     with pytest.raises(ConfigError, match=match):
         load_worker_settings(path)
+
+
+def _kafka_config(**overrides: object) -> dict:
+    data: dict = {
+        "messaging": {"transport": "kafka"},
+        "syncState": {
+            "storageAccountEndpoint": "https://example.table.core.windows.net",
+        },
+        "storageQueue": {"queueName": "repo-sync-followups"},
+    }
+    data.update(overrides)
+    return data
+
+
+def test_load_worker_settings_kafka_derives_queue_url_without_service_bus(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, _kafka_config())
+
+    settings = load_worker_settings(path)
+
+    assert settings.transport == "kafka"
+    assert settings.service_bus is None
+    assert settings.storage_queue is not None
+    assert settings.storage_queue.queue_service_url == "https://example.queue.core.windows.net"
+    assert settings.storage_queue.queue_name == "repo-sync-followups"
+    assert settings.storage_queue.poison_queue_name == "repo-sync-followups-poison"
+    assert settings.storage_queue.receive_max_wait_seconds == 5
+    assert settings.storage_queue.visibility_timeout_seconds == 60
+
+
+def test_load_worker_settings_kafka_env_overrides(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        _kafka_config(
+            storageQueue={
+                "queueName": "file-queue",
+                "poisonQueueName": "file-poison",
+                "receiveMaxWaitSeconds": 15,
+                "visibilityTimeoutSeconds": 30,
+            },
+        ),
+    )
+
+    settings = load_worker_settings(
+        path,
+        {
+            MESSAGING_TRANSPORT_ENV: "kafka",
+            STORAGE_QUEUE_NAME_ENV: "env-queue",
+            STORAGE_QUEUE_POISON_NAME_ENV: "env-poison",
+            STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS_ENV: "20",
+            STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS_ENV: "90",
+            SYNC_STATE_ENDPOINT_ENV: "https://gov.table.core.usgovcloudapi.net",
+        },
+    )
+
+    assert settings.storage_queue is not None
+    assert settings.storage_queue.queue_name == "env-queue"
+    assert settings.storage_queue.poison_queue_name == "env-poison"
+    assert settings.storage_queue.receive_max_wait_seconds == 20
+    assert settings.storage_queue.visibility_timeout_seconds == 90
+    assert settings.storage_queue.queue_service_url == "https://gov.queue.core.usgovcloudapi.net"
+
+
+def test_load_worker_settings_rejects_unknown_transport(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, _kafka_config(messaging={"transport": "eventHub"}))
+
+    with pytest.raises(ConfigError, match="messaging.transport"):
+        load_worker_settings(path)
+
+
+def test_load_worker_settings_kafka_requires_queue_name(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, _kafka_config(storageQueue={}))
+
+    with pytest.raises(ConfigError, match="queueName"):
+        load_worker_settings(path)
+
+
+def test_load_worker_settings_kafka_rejects_non_table_endpoint(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        _kafka_config(
+            syncState={"storageAccountEndpoint": "https://example.blob.core.windows.net"},
+        ),
+    )
+
+    with pytest.raises(ConfigError, match=r"\.table\."):
+        load_worker_settings(path)
+
+
+@pytest.mark.parametrize("queue_name", ["ab", "Repo", "a--b", "-abc", "abc-"])
+def test_load_worker_settings_rejects_invalid_queue_name(tmp_path: Path, queue_name: str) -> None:
+    path = _write_config(tmp_path, _kafka_config(storageQueue={"queueName": queue_name}))
+
+    with pytest.raises(ConfigError, match="lowercase"):
+        load_worker_settings(path)
+
+
+def test_load_worker_settings_service_bus_ignores_storage_queue_section(tmp_path: Path) -> None:
+    path = _write_config(
+        tmp_path,
+        {
+            "serviceBus": {
+                "fullyQualifiedNamespace": "example.servicebus.windows.net",
+                "queueName": "repo-sync-events",
+            },
+            "syncState": {
+                "storageAccountEndpoint": "https://example.table.core.windows.net",
+            },
+            "storageQueue": {"queueName": "NOT-VALID"},
+        },
+    )
+
+    settings = load_worker_settings(path)
+
+    assert settings.transport == "serviceBus"
+    assert settings.storage_queue is None

@@ -21,10 +21,15 @@ cp data/config.yaml.example data/config.yaml
 
 | Key                                  | Required | Default         | Description                                                                                             |
 | ------------------------------------ | -------- | --------------- | ------------------------------------------------------------------------------------------------------- |
-| `serviceBus.fullyQualifiedNamespace` | Yes      | —               | Service Bus namespace FQDN, e.g. `mynamespace.servicebus.windows.net`                                   |
-| `serviceBus.queueName`               | Yes      | —               | Pre-provisioned queue name                                                                              |
+| `messaging.transport`                | No       | `serviceBus`    | `serviceBus` or `kafka`. `kafka` is not runnable until the event-connector REST contract exists         |
+| `serviceBus.fullyQualifiedNamespace` | Yes for `serviceBus` | —     | Service Bus namespace FQDN, e.g. `mynamespace.servicebus.windows.net`. Ignored when transport is `kafka` |
+| `serviceBus.queueName`               | Yes for `serviceBus` | —     | Pre-provisioned queue name. Ignored when transport is `kafka`                                          |
 | `serviceBus.receiveMaxWaitSeconds`   | No       | `5`             | Maximum seconds to wait for a message on each receive poll; does **not** stop the worker when the queue is idle |
-| `syncState.storageAccountEndpoint`   | Yes      | —               | Table service URL, e.g. `https://myaccount.table.core.windows.net`                                      |
+| `storageQueue.queueName`             | Yes for `kafka` | —          | Pre-provisioned storage queue for follow-ups. Must be lowercase, 3–63 characters                       |
+| `storageQueue.poisonQueueName`       | No       | `{queueName}-poison` | Pre-provisioned poison queue in the same storage account                                          |
+| `storageQueue.receiveMaxWaitSeconds` | No       | `5`             | Idle poll wait for the storage queue. Integer from 1 to 300. Does **not** stop the worker              |
+| `storageQueue.visibilityTimeoutSeconds` | No    | `60`            | Lock duration while a storage-queue message is processed. Integer from 1 to 604800                     |
+| `syncState.storageAccountEndpoint`   | Yes      | —               | Table service URL, e.g. `https://myaccount.table.core.windows.net`. On `kafka`, the queue URL is this host with `.table.` replaced by `.queue.` |
 | `syncState.tableName`                | No       | `SnykSyncState` | Sync-state table name                                                                                   |
 | `ado.organization`                   | Yes      | —               | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
 | `ado.host`                           | No       | `dev.azure.com` | ADO host; use for Azure DevOps Server when not hosted on `dev.azure.com`                                |
@@ -36,6 +41,11 @@ Example:
 ado:
   organization: contoso
 
+# messaging.transport defaults to serviceBus. Do not set kafka until the
+# event-connector REST API is implemented; the worker exits at startup.
+# messaging:
+#   transport: serviceBus
+
 serviceBus:
   fullyQualifiedNamespace: mynamespace.servicebus.windows.net
   queueName: repo-sync-events
@@ -44,6 +54,14 @@ serviceBus:
 syncState:
   storageAccountEndpoint: https://myaccount.table.core.windows.net
   # tableName: SnykSyncState
+
+# Used only when messaging.transport is kafka. The queue lives in the same
+# storage account as the table above (https://myaccount.queue.core.windows.net).
+# storageQueue:
+#   queueName: repo-sync-followups
+#   # poisonQueueName: repo-sync-followups-poison
+#   # receiveMaxWaitSeconds: 5
+#   # visibilityTimeoutSeconds: 60
 
 scopeMapping:
   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"  # optional
@@ -56,6 +74,12 @@ scopeMapping:
 ```
 
 Individual settings MAY be overridden by environment variables; **env values take precedence** when set. Scope mapping entries are **config-file only** (no env overrides in v1).
+
+### Message transport (`messaging.transport`)
+
+`serviceBus` (the default) puts GitHub events, ADO events, and internal follow-ups (`import_poll`, `lifecycle_deferred`) on one Service Bus queue.
+
+`kafka` is a GitHub deployment path. GitHub events would be consumed from a Kafka topic through an event-connector REST API. That client is **not implemented**; `worker run` exits with an error that the REST contract is pending, and it does not fall back to Service Bus. ADO audit events stay on the Service Bus path. Follow-ups would go to the storage queue named by `storageQueue.queueName`, in the **same storage account** as `syncState.storageAccountEndpoint`. The worker derives `https://{account}.queue.{suffix}` from the table URL and does not accept a second account. Provision the queue and the poison queue yourself; the worker does not create them. The storage queue carries follow-up JSON only, not webhook bodies.
 
 ### Scope mapping (`scopeMapping`)
 
@@ -187,9 +211,14 @@ See `openspec/specs/ignored-repos/spec.md` for the full capability contract.
 
 | Variable                               | Overrides                            |
 | -------------------------------------- | ------------------------------------ |
+| `MESSAGING_TRANSPORT`                  | `messaging.transport`                |
 | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` | `serviceBus.fullyQualifiedNamespace` |
 | `SERVICEBUS_QUEUE_NAME`                | `serviceBus.queueName`               |
 | `SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS`  | `serviceBus.receiveMaxWaitSeconds`   |
+| `STORAGE_QUEUE_NAME`                   | `storageQueue.queueName`             |
+| `STORAGE_QUEUE_POISON_NAME`            | `storageQueue.poisonQueueName`       |
+| `STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS` | `storageQueue.receiveMaxWaitSeconds` |
+| `STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS` | `storageQueue.visibilityTimeoutSeconds` |
 | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT`  | `syncState.storageAccountEndpoint`   |
 | `SYNC_STATE_TABLE_NAME`                | `syncState.tableName`                |
 

@@ -66,6 +66,34 @@ def test_run_worker_starts_consumer(
     consumer.run.assert_called_once()
 
 
+@patch("commands.worker.WorkerConsumer")
+@patch("commands.worker.DefaultAzureCredential")
+@patch("commands.worker.load_worker_settings")
+def test_run_worker_kafka_exits_before_service_bus(
+    load_settings,
+    credential_cls,
+    consumer_cls,
+) -> None:
+    from config.settings import StorageQueueSettings
+    from tests.conftest import make_worker_settings
+
+    load_settings.return_value = make_worker_settings(
+        transport="kafka",
+        service_bus=None,
+        storage_queue=StorageQueueSettings(
+            queue_service_url="https://example.queue.core.windows.net",
+            queue_name="repo-sync-followups",
+            poison_queue_name="repo-sync-followups-poison",
+        ),
+    )
+
+    parser = build_parser()
+    args = parser.parse_args(["worker", "run"])
+    assert args.func(args) == 1
+    credential_cls.assert_not_called()
+    consumer_cls.assert_not_called()
+
+
 @patch("commands.worker.load_worker_settings")
 def test_run_worker_exits_on_missing_config(load_settings) -> None:
     from config.settings import ConfigError

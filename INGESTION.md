@@ -46,6 +46,18 @@ flowchart LR
 
 All ADO Git repository lifecycle events use the **audit stream** exclusively. GitHub default branch changes use organization webhooks (see `openspec/specs/github-webhook-ingestion/spec.md`).
 
+### Alternate path: Kafka events and a storage queue
+
+Some GitHub deployments will set `messaging.transport: kafka`. On that path:
+
+- GitHub lifecycle events are **consumed only** from a Kafka topic, through an event connector's REST API over HTTP. The worker does not publish follow-ups back to Kafka.
+- `import_poll` and `lifecycle_deferred` messages go to a pre-provisioned Azure Storage queue in the **same storage account** as the sync-state table. Provision that queue and a poison queue (`{queueName}-poison` unless overridden). The worker does not create them.
+- ADO audit ingestion stays on the Service Bus path above.
+
+**This path is not runnable yet.** The event-connector REST contract is still pending, and the worker exits at startup when `messaging.transport` is `kafka`. Do not point a deployment at it until that client exists. There is no KEDA scaler guidance for the storage queue; keep min replicas at 1.
+
+The rest of this document is the Service Bus path.
+
 ---
 
 ## 1. Service Bus setup

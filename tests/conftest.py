@@ -37,4 +37,7 @@ def make_worker_settings(**overrides) -> WorkerSettings:
         ado=overrides.get("ado", defaults.ado),
         scope_mapping=overrides.get("scope_mapping", defaults.scope_mapping),
         snyk=overrides.get("snyk", defaults.snyk),
+        ignored_repos=overrides.get("ignored_repos", defaults.ignored_repos),
+        transport=overrides.get("transport", defaults.transport),
+        storage_queue=overrides.get("storage_queue", defaults.storage_queue),
     )

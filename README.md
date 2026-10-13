@@ -170,6 +170,8 @@ If the **create** wizard does not offer volumes, finish **Create**, then open th
 3. On the **Table** storage account: **Access Control (IAM)** → **Add role assignment** → **Storage Table Data Contributor** → assign to the app's identity.
 4. Ensure `serviceBus`, `syncState`, and `ado` settings in mounted `config.yaml` match your Azure resources — see **[CONFIGURATION.md](CONFIGURATION.md)**.
 
+The default transport is Service Bus. The Kafka transport (`messaging.transport: kafka`) is not runnable until the event-connector REST contract exists; the worker exits at startup if it is selected. When that path is used later, skip the Service Bus role and instead assign **Storage Queue Data Contributor** on the same storage account as the table. The follow-up queue and its poison queue must already exist in that account. Keep **min replicas = 1** for that path.
+
 The worker uses `DefaultAzureCredential`; connection strings are **not** supported.
 
 #### G. Deploy, test, logs
@@ -185,6 +187,8 @@ The worker uses `DefaultAzureCredential`; connection strings are **not** support
 See [Deployment troubleshooting](#deployment-troubleshooting) below.
 
 ### Optional: KEDA Service Bus scaling
+
+This scaler applies to the **Service Bus** transport only. The Kafka transport has no storage-queue scaler guidance and stays at **min replicas = 1**.
 
 After the worker runs reliably with **min replicas = 1**, you may add a **KEDA** scaler on the Container App to scale replica count based on **Service Bus queue depth** (including scale-to-zero with **min replicas = 0**).
 

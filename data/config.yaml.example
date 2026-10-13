@@ -8,6 +8,11 @@ ado:
   organization: contoso
   # host: dev.azure.com
 
+# messaging.transport defaults to serviceBus. kafka exits at startup until the
+# event-connector REST API exists. See CONFIGURATION.md.
+# messaging:
+#   transport: serviceBus
+
 serviceBus:
   fullyQualifiedNamespace: mynamespace.servicebus.windows.net
   queueName: repo-sync-events
@@ -16,6 +21,12 @@ serviceBus:
 syncState:
   storageAccountEndpoint: https://myaccount.table.core.windows.net
   # tableName: SnykSyncState
+
+# Kafka transport only. Queue is in the same storage account as the table
+# (host .table. becomes .queue.). Pre-provision the queue and poison queue.
+# storageQueue:
+#   queueName: repo-sync-followups
+#   # poisonQueueName: repo-sync-followups-poison
 
 # Optional: map ADO project names and GitHub org logins to Snyk organization ids.
 # scopeMapping:
