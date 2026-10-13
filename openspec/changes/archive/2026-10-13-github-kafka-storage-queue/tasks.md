@@ -25,4 +25,4 @@
 
 ## 5. Archive
 
-- [ ] 5.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/github-kafka-storage-queue/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive github-kafka-storage-queue` (or project equivalent) to fold deltas into canonical specs
+- [x] 5.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/github-kafka-storage-queue/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive github-kafka-storage-queue` (or project equivalent) to fold deltas into canonical specs
