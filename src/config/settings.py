@@ -10,7 +10,7 @@ from urllib.parse import urlparse, urlunparse
 
 import yaml
 
-from config.ado_settings import AdoSettings, parse_ado_settings, require_ado_pat
+from config.ado_settings import AdoSettings, parse_ado_settings
 from config.errors import ConfigError
 from config.ignored_repos import IgnoredReposSettings, parse_ignored_repos_settings
 from config.scope_mapping import ScopeMappingSettings, parse_scope_mapping
@@ -79,7 +79,7 @@ class WorkerSettings:
 
     service_bus: ServiceBusSettings | None
     sync_state: SyncStateSettings
-    ado: AdoSettings
+    ado: AdoSettings | None
     scope_mapping: ScopeMappingSettings
     snyk: SnykSettings
     ignored_repos: IgnoredReposSettings | None = None
@@ -302,7 +302,11 @@ def load_worker_settings(
     )
     scope_mapping = parse_scope_mapping(raw.get("scopeMapping"))
     snyk = parse_snyk_settings(raw.get("snyk"))
-    ado = parse_ado_settings(raw.get("ado"), env)
+    ado = (
+        parse_ado_settings(raw.get("ado"), env)
+        if scope_mapping.ado_by_project_name
+        else None
+    )
     ignored_repos = parse_ignored_repos_settings(raw.get("ignoredRepos"), config_path=path)
 
     service_bus: ServiceBusSettings | None = None

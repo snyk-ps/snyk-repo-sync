@@ -101,7 +101,7 @@ def test_parse_scope_mapping_duplicate_github_org_name_across_sections() -> None
                 "github": [
                     {"orgName": "dup", "snykOrgId": "org-1"},
                 ],
-                "github-cloud": [
+                "github-cloud-app": [
                     {"orgName": "dup", "snykOrgId": "org-2"},
                 ],
             },
@@ -187,12 +187,33 @@ def test_parse_scope_mapping_assigns_integration_type_from_section_key() -> None
     settings = parse_scope_mapping(
         {
             "azure-repos": [{"projectName": "proj", "snykOrgId": "org"}],
-            "github-cloud": [{"orgName": "contoso", "snykOrgId": "org"}],
+            "github-cloud-app": [{"orgName": "contoso", "snykOrgId": "org"}],
+            "github-server-app": [{"orgName": "fabrikam", "snykOrgId": "org"}],
         },
     )
 
     assert settings.ado_by_project_name["proj"].integration_type == "azure-repos"
-    assert settings.github_by_org_name["contoso"].integration_type == "github-cloud"
+    assert settings.github_by_org_name["contoso"].integration_type == "github-cloud-app"
+    assert settings.github_by_org_name["fabrikam"].integration_type == "github-server-app"
+
+
+@pytest.mark.parametrize(
+    ("obsolete_key", "replacement"),
+    [
+        ("github-cloud", "github-cloud-app"),
+        ("github-server", "github-server-app"),
+    ],
+)
+def test_parse_scope_mapping_rejects_obsolete_github_app_key(
+    obsolete_key: str,
+    replacement: str,
+) -> None:
+    with pytest.raises(ConfigError, match=rf"allowed keys:.*{replacement}"):
+        parse_scope_mapping(
+            {
+                obsolete_key: [{"orgName": "contoso", "snykOrgId": "org"}],
+            },
+        )
 
 
 def test_parse_scope_mapping_rejects_unknown_top_level_key() -> None:
@@ -218,7 +239,7 @@ def test_resolve_integration_settings_uses_defaults_for_unmapped_scope() -> None
 def test_resolve_integration_settings_uses_single_github_section_for_default() -> None:
     mapping = parse_scope_mapping(
         {
-            "github-enterprise": [{"orgName": "contoso", "snykOrgId": "org"}],
+            "github-cloud-app": [{"orgName": "contoso", "snykOrgId": "org"}],
         },
     )
 
@@ -228,7 +249,7 @@ def test_resolve_integration_settings_uses_single_github_section_for_default() -
         lookup_key="unknown",
     )
 
-    assert settings.integration_type == "github-enterprise"
+    assert settings.integration_type == "github-cloud-app"
     assert settings.integration_id is None
 
 

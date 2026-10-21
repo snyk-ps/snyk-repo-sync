@@ -1,14 +1,24 @@
 """Tests for ADO lifecycle sync orchestration."""
 
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
-from config.scope_mapping import AdoScopeEntry, ResolvedScopeMapping, ScopeMappingSettings
+from config.scope_mapping import (
+    AdoScopeEntry,
+    ResolvedScopeMapping,
+    ScopeMappingSettings,
+    parse_scope_mapping,
+)
 from config.snyk_settings import SnykSettings, TargetRemovalSettings
 from snyk.client import ImportJobStatus
 from sync_state.entities import RepositoryState
-from worker.lifecycle import WorkerSyncDependencies, process_import_poll, process_normalized_event
-from worker.normalize import AdoScope, NormalizedEvent, RepositoryRef
+from worker.lifecycle import (
+    WorkerSyncDependencies,
+    process_import_poll,
+    process_normalized_event,
+)
+from worker.normalize import AdoScope, GitHubScope, NormalizedEvent, RepositoryRef
 
 
 def _deps(
@@ -57,7 +67,7 @@ def _created_event(*, with_default_branch: bool = False) -> NormalizedEvent:
         event_type="repo.created",
         scope_id="scope",
         repository_id="repo",
-        occurred_at=datetime(2026, 8, 9, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 8, 9, tzinfo=UTC),
         repository=RepositoryRef(name="demo"),
         ado=AdoScope(
             org_id="org",
@@ -66,6 +76,20 @@ def _created_event(*, with_default_branch: bool = False) -> NormalizedEvent:
             project_name="proj",
         ),
         payload=payload,
+    )
+
+
+def _github_created_event() -> NormalizedEvent:
+    return NormalizedEvent(
+        source="github",
+        event_id="github-event-1",
+        event_type="repo.created",
+        scope_id="contoso",
+        repository_id="github-repo",
+        occurred_at=datetime(2026, 10, 21, tzinfo=UTC),
+        repository=RepositoryRef(name="demo"),
+        github=GitHubScope(org_login="contoso"),
+        payload={"defaultBranch": "main"},
     )
 
 
@@ -94,6 +118,40 @@ def test_repo_created_starts_import_and_schedules_poll() -> None:
     deps.ado.get_repository_default_branch.assert_called_once_with("repo")
     assert len(outcome.scheduled_followups) == 1
     assert outcome.scheduled_followups[0].body["syncPhase"] == "import_poll"
+
+
+def test_github_cloud_app_import_uses_resolved_integration_id() -> None:
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = None
+    sync_state.count_pending_imports.return_value = 0
+    snyk = MagicMock()
+    snyk.start_import.return_value = "job-1"
+    deps = replace(
+        _deps(sync_state=sync_state, snyk=snyk),
+        ado=None,
+        scope_mapping=parse_scope_mapping(
+            {
+                "github-cloud-app": [
+                    {"orgName": "contoso", "snykOrgId": "org-1"},
+                ],
+            },
+        ),
+    )
+    deps.integration_resolver.resolve.return_value = "github-app-integration"
+
+    process_normalized_event(
+        _github_created_event(),
+        ResolvedScopeMapping(snyk_org_id="org-1", resolution="mapped"),
+        deps=deps,
+    )
+
+    deps.integration_resolver.resolve.assert_called_once_with(
+        org_id="org-1",
+        integration_type="github-cloud-app",
+        configured_integration_id=None,
+    )
+    assert snyk.start_import.call_args.args[1] == "github-app-integration"
+    assert snyk.start_import.call_args.args[2].branch == "main"
 
 
 def test_repo_created_with_explicit_default_branch_stores_branch_in_state() -> None:
@@ -161,6 +219,60 @@ def test_import_poll_completes_and_retains_job_id() -> None:
     assert final_state.tag_applied is False
     snyk.find_target_id.assert_called_once()
     assert outcome.scheduled_followups == ()
+
+
+def test_github_server_app_import_poll_filters_target_lookup() -> None:
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="",
+        default_branch="main",
+        status="pending",
+        desired_state_hash="hash",
+        last_event_id="github-event-1",
+        tag_applied=False,
+        import_job_id="job-1",
+        import_status="pending",
+        owner_name="contoso",
+    )
+    snyk = MagicMock()
+    snyk.get_import_job.return_value = ImportJobStatus(
+        job_id="job-1",
+        state="complete",
+        target_id="",
+    )
+    snyk.find_target_id.return_value = "target-1"
+    deps = replace(
+        _deps(sync_state=sync_state, snyk=snyk),
+        ado=None,
+        scope_mapping=parse_scope_mapping(
+            {
+                "github-server-app": [
+                    {"orgName": "contoso", "snykOrgId": "org-1"},
+                ],
+            },
+        ),
+    )
+    deps.integration_resolver.resolve.return_value = "github-app-integration"
+
+    process_import_poll(
+        source="github",
+        scope_id="contoso",
+        repository_id="github-repo",
+        source_event_id="github-event-1",
+        import_job_id="job-1",
+        retry_count=0,
+        scope_lookup_key="contoso",
+        deps=deps,
+    )
+
+    snyk.find_target_id.assert_called_once_with(
+        "org-1",
+        owner="contoso",
+        repo_name="demo",
+        branch="main",
+        source_type="github-server-app",
+    )
 
 
 def test_repo_deleted_marks_inactive() -> None:

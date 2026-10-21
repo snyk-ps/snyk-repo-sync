@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -146,6 +146,26 @@ def test_process_message_dead_letters_invalid_normalization() -> None:
 
     assert len(transport.dead_letters) == 1
     assert transport.dead_letters[0][1] == "InvalidNormalization"
+    assert transport.completed == []
+
+
+@patch(
+    "worker.consumer.handle_queue_message",
+    side_effect=ConfigError("ADO default-branch enrichment requires ADO credentials"),
+)
+def test_process_message_dead_letters_configuration_error(_handle_message) -> None:
+    message = FakeMessage(b"{}")
+    transport = FakeTransport()
+
+    process_message(message, transport, settings=SETTINGS)
+
+    assert transport.dead_letters == [
+        (
+            message,
+            "ConfigurationError",
+            "ADO default-branch enrichment requires ADO credentials",
+        ),
+    ]
     assert transport.completed == []
 
 

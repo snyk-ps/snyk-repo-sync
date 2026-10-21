@@ -2,10 +2,9 @@
 
 import io
 import json
+import urllib.error
 from email.message import Message
 from urllib.parse import parse_qs, urlparse
-
-import urllib.error
 
 import pytest
 
@@ -51,6 +50,8 @@ def test_list_integrations_parses_v1_response() -> None:
             {
                 "azure-repos": "7474fa46-88bd-4fa4-8442-971c246ed662",
                 "github": "81b3ce18-6b93-4978-88df-8f51a5170897",
+                "github-cloud-app": "c5687756-fbd8-4fc4-92b8-808c035bc308",
+                "github-server-app": "9e1206b3-257a-4dc4-a8ef-50814792b574",
                 "github-enterprise": "4509bd6c-2aa4-4c87-a72c-8311cfd39abb",
             },
         )
@@ -58,10 +59,12 @@ def test_list_integrations_parses_v1_response() -> None:
     client = SnykClient("token", opener=opener)
     integrations = client.list_integrations("org-1")
 
-    assert len(integrations) == 3
+    assert len(integrations) == 5
     by_type = {item.integration_type: item.id for item in integrations}
     assert by_type["azure-repos"] == "7474fa46-88bd-4fa4-8442-971c246ed662"
     assert by_type["github"] == "81b3ce18-6b93-4978-88df-8f51a5170897"
+    assert by_type["github-cloud-app"] == "c5687756-fbd8-4fc4-92b8-808c035bc308"
+    assert by_type["github-server-app"] == "9e1206b3-257a-4dc4-a8ef-50814792b574"
 
 
 def test_list_integrations_parses_legacy_object_response() -> None:
@@ -243,6 +246,26 @@ def test_find_target_id_matches_display_name() -> None:
     )
 
     assert target_id == "target-1"
+
+
+@pytest.mark.parametrize("source_type", ["github-cloud-app", "github-server-app"])
+def test_find_target_id_filters_by_github_app_source_type(source_type: str) -> None:
+    def opener(request, timeout=30):
+        query = parse_qs(urlparse(request.full_url).query)
+        assert query.get("source_types") == [source_type]
+        return FakeHTTPResponse(200, {"data": []})
+
+    client = SnykClient("token", opener=opener)
+
+    target_id = client.find_target_id(
+        "org-1",
+        owner="contoso",
+        repo_name="demo",
+        branch="main",
+        source_type=source_type,
+    )
+
+    assert target_id is None
 
 
 def test_find_target_id_matches_empty_target() -> None:

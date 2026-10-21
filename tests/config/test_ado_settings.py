@@ -62,6 +62,11 @@ def test_load_worker_settings_requires_ado_organization(tmp_path: Path) -> None:
                 "syncState": {
                     "storageAccountEndpoint": "https://example.table.core.windows.net",
                 },
+                "scopeMapping": {
+                    "azure-repos": [
+                        {"projectName": "proj", "snykOrgId": "org"},
+                    ],
+                },
             },
         ),
         encoding="utf-8",

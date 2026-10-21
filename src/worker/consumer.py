@@ -139,6 +139,15 @@ def process_message(
             description=str(exc),
         )
         return
+    except ConfigError as exc:
+        logger.error("Dead-lettering message after configuration failure: %s", exc)
+        _dead_letter(
+            message,
+            transport,
+            reason="ConfigurationError",
+            description=str(exc),
+        )
+        return
     except SnykApiError as exc:
         logger.error("Dead-lettering message after Snyk API failure: %s", exc)
         _dead_letter(

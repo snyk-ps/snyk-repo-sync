@@ -21,7 +21,7 @@ The PAT MUST include **Code (Read)** scope (`Code` → Read in Azure DevOps) so 
 
 #### Scenario: Unexpected ADO enrichment without configured credentials
 - **WHEN** an ADO event is routed without an explicit `azure-repos` mapping, its default branch is absent from the event and sync state, and no ADO client is configured
-- **THEN** import does not proceed and message processing fails with a clear configuration error without guessing a branch
+- **THEN** import does not proceed and the message is dead-lettered with a clear configuration error without guessing a branch or stopping the worker
 
 #### Scenario: Insufficient PAT scope
 - **WHEN** the ADO Git REST API returns 401 or 403 for repository metadata lookup

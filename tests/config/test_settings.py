@@ -61,7 +61,7 @@ def test_load_worker_settings_success(tmp_path: Path) -> None:
     assert settings.scope_mapping.default_snyk_org_id is None
     assert settings.scope_mapping.ado_by_project_name == {}
     assert settings.snyk.max_concurrent_pending_imports == 100
-    assert settings.ado.organization == "example-org"
+    assert settings.ado is None
 
 
 def test_load_worker_settings_with_scope_mapping(tmp_path: Path) -> None:
@@ -91,6 +91,61 @@ def test_load_worker_settings_with_scope_mapping(tmp_path: Path) -> None:
 
     assert settings.scope_mapping.default_snyk_org_id == "default-org"
     assert "proj" in settings.scope_mapping.ado_by_project_name
+    assert settings.ado is not None
+    assert settings.ado.organization == "example-org"
+
+
+def test_load_worker_settings_without_ado_mapping_ignores_ado_settings(
+    tmp_path: Path,
+) -> None:
+    path = _write_config(
+        tmp_path,
+        {
+            "ado": {},
+            "serviceBus": {
+                "fullyQualifiedNamespace": "example.servicebus.windows.net",
+                "queueName": "repo-sync-events",
+            },
+            "syncState": {
+                "storageAccountEndpoint": "https://example.table.core.windows.net",
+            },
+            "scopeMapping": {
+                "github-cloud-app": [
+                    {"orgName": "contoso", "snykOrgId": "github-org"},
+                ],
+            },
+        },
+    )
+
+    settings = load_worker_settings(path, {})
+
+    assert settings.ado is None
+
+
+def test_load_worker_settings_with_ado_mapping_requires_organization(
+    tmp_path: Path,
+) -> None:
+    path = _write_config(
+        tmp_path,
+        {
+            "ado": {},
+            "serviceBus": {
+                "fullyQualifiedNamespace": "example.servicebus.windows.net",
+                "queueName": "repo-sync-events",
+            },
+            "syncState": {
+                "storageAccountEndpoint": "https://example.table.core.windows.net",
+            },
+            "scopeMapping": {
+                "azure-repos": [
+                    {"projectName": "proj", "snykOrgId": "ado-org"},
+                ],
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError, match="ado.organization"):
+        load_worker_settings(path, {})
 
 
 def test_load_worker_settings_rejects_duplicate_scope_mapping(tmp_path: Path) -> None:

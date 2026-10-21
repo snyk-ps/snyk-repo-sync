@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ado.client import AdoClient
+from config.ignored_repos import IgnoreMatch, is_ignored
 from config.scope_mapping import (
     ResolvedScopeMapping,
     ScopeMappingSettings,
@@ -14,9 +16,6 @@ from config.scope_mapping import (
     resolve_integration_settings,
     resolve_scope_mapping,
 )
-from config.ignored_repos import IgnoreMatch, is_ignored
-from worker.ignore_policy import IgnorePolicyState
-from ado.client import AdoClient
 from config.snyk_settings import RemovalMode, SnykSettings
 from snyk.client import ImportTarget, SnykApiError, SnykClient
 from snyk.integration_resolver import IntegrationResolver
@@ -30,7 +29,6 @@ from worker.followup import (
     build_lifecycle_deferred_message,
     compute_backoff_seconds,
 )
-from worker.import_branch import resolve_import_branch
 from worker.idempotency import (
     compute_desired_state_hash,
     default_branch_for_event,
@@ -39,6 +37,8 @@ from worker.idempotency import (
     is_desired_state_current,
     is_duplicate_event,
 )
+from worker.ignore_policy import IgnorePolicyState
+from worker.import_branch import resolve_import_branch
 from worker.normalize import NormalizedEvent, owner_name, scope_lookup_key
 from worker.target_resolve import (
     TargetLookup,
@@ -67,7 +67,7 @@ class WorkerSyncDependencies:
 
     sync_state: SyncStateStore
     snyk: SnykClient
-    ado: AdoClient
+    ado: AdoClient | None
     integration_resolver: IntegrationResolver
     scope_mapping: ScopeMappingSettings
     snyk_settings: SnykSettings

@@ -59,8 +59,8 @@ Deploy the worker as a **Container App** (long-running `worker run` consumer) �
 | **Process model** | Long-running `worker run` receive loop (image default `worker run --config /config/config.yaml`)                                                         |
 | **CPU / memory**  | Start around **0.5 vCPU** and **1 GiB**; increase if processing is slow or OOM                                                                           |
 | **Replicas**      | **Min replicas: 1** for first production deploy (always consuming). Multiple replicas may run independently on the same queue                            |
-| **Networking**    | Outbound **HTTPS** to Snyk API, `dev.azure.com` (or your `ado.host`), and your Table Storage endpoint                                                    |
-| **Secrets**       | `SNYK_TOKEN` and `ADO_PAT` via Key Vault references / Container Apps secrets, not the image or YAML                                                      |
+| **Networking**    | Outbound **HTTPS** to Snyk API and your Table Storage endpoint; also `dev.azure.com` (or `ado.host`) when `azure-repos` mappings are configured           |
+| **Secrets**       | `SNYK_TOKEN`, plus `ADO_PAT` when `scopeMapping.azure-repos` is non-empty, via Key Vault references / Container Apps secrets                             |
 | **Identity**      | Managed identity with **Azure Service Bus Data Owner** and **Storage Table Data Contributor** — see **[CONFIGURATION.md § RBAC](CONFIGURATION.md#rbac)** |
 | **Config**        | Non-secret operator YAML mounted at `/config/config.yaml` (Azure Files)                                                                                  |
 | **Image**         | `ghcr.io/snyk-ps/snyk-repo-sync:<version>` — pin a release tag or digest                                                                                 |
@@ -131,13 +131,15 @@ You can create the environment **inside** the Container App wizard (**Basics**) 
 
 On the app's container configuration (wording varies by blade version). The **create** wizard may not expose **Secrets**; if not, open the deployed **Container App** → **Settings** → **Secrets**, then reference those secrets from **Environment variables** on the container template (same idea as [Manage secrets in Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/manage-secrets?tabs=azure-portal)).
 
-**Secrets** (app-level): add at least:
+**Secrets** (app-level): always add `snyk-token`. Add `ado-pat` only when
+`scopeMapping.azure-repos` contains one or more mappings; GitHub-only
+deployments do not need `ado.organization` or `ADO_PAT`.
 
 
 | Secret name  | Value                                                                                                                      |
 | ------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | `snyk-token` | Snyk API token                                                                                                             |
-| `ado-pat`    | Azure DevOps PAT (**Code: Read** — see **[CONFIGURATION.md § ADO PAT permissions](CONFIGURATION.md#ado-pat-permissions)**) |
+| `ado-pat`    | Required only with `azure-repos` mappings: Azure DevOps PAT (**Code: Read** — see **[CONFIGURATION.md § ADO PAT permissions](CONFIGURATION.md#ado-pat-permissions)**) |
 
 
 **Environment variables** for the container:
@@ -146,7 +148,7 @@ On the app's container configuration (wording varies by blade version). The **cr
 | Variable     | Source                        |
 | ------------ | ----------------------------- |
 | `SNYK_TOKEN` | Reference secret `snyk-token` |
-| `ADO_PAT`    | Reference secret `ado-pat`    |
+| `ADO_PAT`    | Reference secret `ado-pat` when `scopeMapping.azure-repos` is non-empty |
 
 
 **Key Vault:** if your org requires it, use Key Vault references on Container Apps secrets instead of pasting values.
@@ -225,7 +227,7 @@ Recommend `PYTHONUNBUFFERED=1` on the container for timely log shipping.
 | **Missing config / file not found**        | Mount path is exactly `/config`; share root contains `config.yaml`                                                                                                                                                                                |
 | **Volume mount / Permission denied**       | Storage account **firewall** / **public network access**, wrong **access key** on the environment volume — see step **A** and [Use storage mounts in Azure Container Apps](https://learn.microsoft.com/en-us/azure/container-apps/storage-mounts) |
 | **Azure authentication failure**           | Managed identity enabled; **Service Bus Data Owner** and **Table Data Contributor** assigned at correct scope                                                                                                                                     |
-| **Snyk or ADO auth errors**                | `SNYK_TOKEN` and `ADO_PAT` secrets mapped correctly; PAT has **Code (Read)** for mapped ADO projects                                                                                                                                              |
+| **Snyk or ADO auth errors**                | `SNYK_TOKEN` is mapped; when `azure-repos` mappings are configured, `ADO_PAT` is mapped and has **Code (Read)** for those projects                                                                                                                |
 | **No messages processed**                  | Queue and ingress configured per **[INGESTION.md](INGESTION.md)**; `serviceBus` settings in config match the queue; ADO audit latency (~30 min) is expected                                                                                       |
 | **Pull image failed**                      | Image `ghcr.io/snyk-ps/snyk-repo-sync:<version>` — check GHCR visibility and registry credentials; see **[CONTRIBUTING.md](CONTRIBUTING.md)**                                                                                                     |
 | **Messages dead-lettered**                 | See [Troubleshooting](#troubleshooting) — `InvalidMessage`, `InvalidNormalization`, `ImportJobFailed`                                                                                                                                             |

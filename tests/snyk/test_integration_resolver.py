@@ -1,6 +1,8 @@
 """Tests for Snyk integration id resolution."""
 
-from snyk.client import SnykIntegration
+import pytest
+
+from snyk.client import SnykApiError, SnykIntegration
 from snyk.integration_resolver import IntegrationResolver
 
 
@@ -59,19 +61,37 @@ def test_refresh_replaces_cached_integration_id() -> None:
     assert refreshed == "new-integration"
 
 
-def test_lookup_error_mentions_integration_type_not_provider_source() -> None:
+@pytest.mark.parametrize(
+    "integration_type",
+    ["github-cloud-app", "github-server-app"],
+)
+def test_resolve_matches_github_app_integration_type(integration_type: str) -> None:
     client = FakeSnykClient()
-    client.integrations = [SnykIntegration(id="gh", integration_type="github-cloud")]
+    client.integrations = [
+        SnykIntegration(id="github-app-integration", integration_type=integration_type),
+    ]
     resolver = IntegrationResolver(client)  # type: ignore[arg-type]
 
-    try:
+    integration_id = resolver.resolve(
+        org_id="org-1",
+        integration_type=integration_type,  # type: ignore[arg-type]
+        configured_integration_id=None,
+    )
+
+    assert integration_id == "github-app-integration"
+
+
+def test_lookup_error_mentions_integration_type_not_provider_source() -> None:
+    client = FakeSnykClient()
+    client.integrations = [SnykIntegration(id="gh", integration_type="github-cloud-app")]
+    resolver = IntegrationResolver(client)  # type: ignore[arg-type]
+
+    with pytest.raises(SnykApiError) as error:
         resolver.resolve(
             org_id="org-1",
             integration_type="azure-repos",
             configured_integration_id=None,
         )
-    except Exception as exc:
-        assert "No azure-repos integration found" in str(exc)
-        assert "ado" not in str(exc).lower() or "azure-repos" in str(exc)
-    else:
-        raise AssertionError("expected SnykApiError")
+
+    assert "No azure-repos integration found" in str(error.value)
+    assert "ado" not in str(error.value).lower() or "azure-repos" in str(error.value)

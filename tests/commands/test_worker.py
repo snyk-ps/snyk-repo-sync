@@ -38,6 +38,7 @@ def test_main_prints_help_without_command() -> None:
     assert main([]) == 0
 
 
+@patch("commands.worker.AdoClient")
 @patch("commands.worker.require_ado_pat", return_value="test-ado-pat")
 @patch("commands.worker.require_snyk_token", return_value="test-token")
 @patch("commands.worker.WorkerConsumer")
@@ -50,11 +51,23 @@ def test_run_worker_starts_consumer(
     sync_state_cls,
     consumer_cls,
     _require_token,
-    _require_ado_pat,
+    require_ado_pat,
+    ado_client_cls,
 ) -> None:
+    from config.ado_settings import AdoSettings
+    from config.scope_mapping import parse_scope_mapping
     from tests.conftest import make_worker_settings
 
-    load_settings.return_value = make_worker_settings()
+    load_settings.return_value = make_worker_settings(
+        ado=AdoSettings(organization="example-org"),
+        scope_mapping=parse_scope_mapping(
+            {
+                "azure-repos": [
+                    {"projectName": "proj", "snykOrgId": "org"},
+                ],
+            },
+        ),
+    )
     sync_state = sync_state_cls.return_value
     consumer = consumer_cls.return_value
     consumer.run.side_effect = KeyboardInterrupt
@@ -64,6 +77,43 @@ def test_run_worker_starts_consumer(
     assert args.func(args) == 0
     sync_state.ensure_table.assert_called_once()
     consumer.run.assert_called_once()
+    require_ado_pat.assert_called_once_with()
+    ado_client_cls.assert_called_once_with(
+        "test-ado-pat",
+        organization="example-org",
+        host="dev.azure.com",
+    )
+
+
+@patch("commands.worker.AdoClient")
+@patch("commands.worker.require_ado_pat")
+@patch("commands.worker.require_snyk_token", return_value="test-token")
+@patch("commands.worker.WorkerConsumer")
+@patch("commands.worker.SyncStateStore")
+@patch("commands.worker.load_worker_settings")
+@patch("commands.worker.DefaultAzureCredential")
+def test_run_worker_without_ado_mapping_skips_ado_credentials(
+    _credential_cls,
+    load_settings,
+    sync_state_cls,
+    consumer_cls,
+    _require_token,
+    require_ado_pat,
+    ado_client_cls,
+) -> None:
+    from tests.conftest import make_worker_settings
+
+    load_settings.return_value = make_worker_settings()
+    consumer = consumer_cls.return_value
+    consumer.run.side_effect = KeyboardInterrupt
+
+    parser = build_parser()
+    args = parser.parse_args(["worker", "run"])
+
+    assert args.func(args) == 0
+    sync_state_cls.return_value.ensure_table.assert_called_once()
+    require_ado_pat.assert_not_called()
+    ado_client_cls.assert_not_called()
 
 
 @patch("commands.worker.WorkerConsumer")

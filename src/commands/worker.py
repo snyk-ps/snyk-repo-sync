@@ -6,11 +6,11 @@ import logging
 from azure.identity import DefaultAzureCredential
 
 from ado.client import AdoClient
+from config.ado_settings import require_ado_pat
 from config.settings import (
-    ConfigError,
     DEFAULT_CONFIG_PATH,
+    ConfigError,
     load_worker_settings,
-    require_ado_pat,
     require_snyk_token,
 )
 from snyk.client import SnykClient
@@ -51,7 +51,14 @@ def run_worker(args: argparse.Namespace) -> int:
         if settings.transport == "kafka":
             open_github_event_source()
         snyk_token = require_snyk_token()
-        ado_pat = require_ado_pat()
+        ado_client: AdoClient | None = None
+        if settings.ado is not None:
+            ado_pat = require_ado_pat()
+            ado_client = AdoClient(
+                ado_pat,
+                organization=settings.ado.organization,
+                host=settings.ado.host,
+            )
     except ConfigError as exc:
         logger.error("%s", exc)
         return 1
@@ -65,11 +72,6 @@ def run_worker(args: argparse.Namespace) -> int:
         return 1
 
     snyk_client = SnykClient(snyk_token)
-    ado_client = AdoClient(
-        ado_pat,
-        organization=settings.ado.organization,
-        host=settings.ado.host,
-    )
     policy_state: IgnorePolicyState | None = None
     if settings.ignored_repos is not None:
         policy_state = IgnorePolicyState()

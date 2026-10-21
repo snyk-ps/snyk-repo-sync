@@ -1,9 +1,11 @@
 # Operator configuration (non-secrets).
 # Mount at /config/config.yaml in production (Azure Files).
 # Authenticate with DefaultAzureCredential (managed identity or `az login`).
-# Set SNYK_TOKEN and ADO_PAT in the environment (secrets).
-# ADO_PAT: Code (Read) scope; access to ado.organization and mapped projects.
+# Set SNYK_TOKEN in the environment (secret).
+# When scopeMapping.azure-repos is non-empty, also set ADO_PAT with Code (Read)
+# access to ado.organization and every mapped project.
 
+# Required only when scopeMapping.azure-repos is non-empty.
 ado:
   organization: contoso
   # host: dev.azure.com
@@ -35,9 +37,10 @@ syncState:
 #     - projectName: Contoso-Platform
 #       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 #       # snykIntegrationId: "bbbbbbbb-..."       # optional
-#   github-enterprise:
+#   github-cloud-app:
 #     - orgName: contoso
 #       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
+#   # Other supported GitHub keys: github, github-server-app, github-enterprise.
 
 # Optional: ignore policy file (YAML or JSON, UTF-8).
 # Relative paths resolve from the directory containing this config file.

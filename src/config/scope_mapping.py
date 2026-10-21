@@ -12,14 +12,14 @@ ResolutionKind = Literal["mapped", "default"]
 SnykIntegrationType = Literal[
     "azure-repos",
     "github",
-    "github-cloud",
-    "github-server",
+    "github-cloud-app",
+    "github-server-app",
     "github-enterprise",
 ]
 
 ADO_INTEGRATION_TYPE: SnykIntegrationType = "azure-repos"
 GITHUB_INTEGRATION_TYPES = frozenset(
-    {"github", "github-cloud", "github-server", "github-enterprise"},
+    {"github", "github-cloud-app", "github-server-app", "github-enterprise"},
 )
 ALL_INTEGRATION_TYPES = frozenset({ADO_INTEGRATION_TYPE}) | GITHUB_INTEGRATION_TYPES
 LEGACY_SCOPE_KEYS = frozenset({"ado"})
@@ -168,8 +168,8 @@ def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
 
     Top-level keys (other than ``defaultSnykOrgId``) MUST be Snyk integration
     types: ``azure-repos`` for ADO project entries, and ``github``,
-    ``github-cloud``, ``github-server``, or ``github-enterprise`` for GitHub org
-    entries.
+    ``github-cloud-app``, ``github-server-app``, or ``github-enterprise`` for
+    GitHub org entries.
     """
     if raw is None:
         return ScopeMappingSettings.empty()
@@ -193,7 +193,8 @@ def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
         if key in LEGACY_SCOPE_KEYS:
             raise ConfigError(
                 f"scopeMapping.{key} is no longer supported; use integration type keys "
-                f"(azure-repos for ADO, github/github-cloud/github-server/github-enterprise for GitHub)",
+                "(azure-repos for ADO, "
+                "github/github-cloud-app/github-server-app/github-enterprise for GitHub)",
             )
         if key not in ALL_INTEGRATION_TYPES:
             allowed = ", ".join(sorted(ALL_INTEGRATION_TYPES))

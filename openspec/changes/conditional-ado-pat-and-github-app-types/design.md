@@ -34,7 +34,7 @@ Alternative considered: require ADO credentials whenever `defaultSnykOrgId` exis
 
 ### Represent the ADO dependency as optional
 
-`WorkerSettings.ado` and the lifecycle ADO client dependency will be optional. Branch resolution will continue to prefer event and sync-state values. Only an ADO event lacking both values needs the client; if none was configured, resolution will raise a clear configuration error and the message will follow existing worker failure handling.
+`WorkerSettings.ado` and the lifecycle ADO client dependency will be optional. Branch resolution will continue to prefer event and sync-state values. Only an ADO event lacking both values needs the client; if none was configured, resolution will raise a clear configuration error and the consumer will dead-letter that message as `ConfigurationError` so the worker continues processing other messages.
 
 Alternative considered: construct a placeholder client with empty credentials. That defers the error to an outbound request and produces a misleading authentication failure.
 

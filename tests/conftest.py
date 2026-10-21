@@ -1,6 +1,5 @@
 """Shared test helpers for worker settings."""
 
-from config.ado_settings import AdoSettings
 from config.scope_mapping import ScopeMappingSettings
 from config.settings import ServiceBusSettings, SyncStateSettings, WorkerSettings
 from config.snyk_settings import SnykSettings, TargetRemovalSettings
@@ -17,7 +16,7 @@ def make_worker_settings(**overrides) -> WorkerSettings:
             storage_account_endpoint="https://example.table.core.windows.net",
             table_name="SnykSyncState",
         ),
-        ado=AdoSettings(organization="example-org"),
+        ado=None,
         scope_mapping=ScopeMappingSettings.empty(),
         snyk=SnykSettings(
             max_concurrent_pending_imports=100,

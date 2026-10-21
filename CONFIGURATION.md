@@ -31,13 +31,14 @@ cp data/config.yaml.example data/config.yaml
 | `storageQueue.visibilityTimeoutSeconds` | No    | `60`            | Lock duration while a storage-queue message is processed. Integer from 1 to 604800                     |
 | `syncState.storageAccountEndpoint`   | Yes      | —               | Table service URL, e.g. `https://myaccount.table.core.windows.net`. On `kafka`, the queue URL is this host with `.table.` replaced by `.queue.` |
 | `syncState.tableName`                | No       | `SnykSyncState` | Sync-state table name                                                                                   |
-| `ado.organization`                   | Yes      | —               | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
+| `ado.organization`                   | With one or more `scopeMapping.azure-repos` entries | — | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
 | `ado.host`                           | No       | `dev.azure.com` | ADO host; use for Azure DevOps Server when not hosted on `dev.azure.com`                                |
 
 
 Example:
 
 ```yaml
+# Required only when scopeMapping.azure-repos is non-empty.
 ado:
   organization: contoso
 
@@ -68,7 +69,7 @@ scopeMapping:
   azure-repos:
     - projectName: Contoso-Platform
       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-  github-enterprise:
+  github-cloud-app:
     - orgName: contoso
       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
 ```
@@ -91,8 +92,8 @@ Maps provider scopes to Snyk organization ids. Top-level keys under `scopeMappin
 | `defaultSnykOrgId`  | No       | Fallback Snyk org id when no explicit entry matches                |
 | `azure-repos`       | No       | List of ADO project mappings (Snyk integration type `azure-repos`) |
 | `github`            | No       | List of GitHub org mappings for Snyk integration type `github`     |
-| `github-cloud`      | No       | GitHub org mappings for Snyk integration type `github-cloud`       |
-| `github-server`     | No       | GitHub org mappings for Snyk integration type `github-server`      |
+| `github-cloud-app`  | No       | GitHub org mappings for Snyk integration type `github-cloud-app`   |
+| `github-server-app` | No       | GitHub org mappings for Snyk integration type `github-server-app`  |
 | `github-enterprise` | No       | GitHub org mappings for Snyk integration type `github-enterprise`  |
 
 
@@ -106,7 +107,7 @@ Each `azure-repos` entry (ADO):
 | `snykIntegrationId` | No       | Integration id — optional; resolved via API when omitted           |
 
 
-Each **GitHub integration type** entry (`github`, `github-cloud`, `github-server`, `github-enterprise`):
+Each **GitHub integration type** entry (`github`, `github-cloud-app`, `github-server-app`, `github-enterprise`):
 
 
 | Key                 | Required | Description                                              |
@@ -116,7 +117,7 @@ Each **GitHub integration type** entry (`github`, `github-cloud`, `github-server
 | `snykIntegrationId` | No       | Integration id — optional; resolved via API when omitted |
 
 
-The integration type for API lookup is determined by the section key (for example `github-enterprise`), not a per-entry field.
+The integration type for API lookup is determined by the section key (for example `github-cloud-app`), not a per-entry field. The worker matches that value against `GET /v1/org/{org_id}/integrations` to resolve the integration id. It also sends the same value as the `source_types` filter on `GET /rest/orgs/{org_id}/targets`; import itself uses the resolved integration id at `POST /v1/org/{org_id}/integrations/{integration_id}/import`.
 
 When using `defaultSnykOrgId` without an explicit scope entry, the worker uses `azure-repos` for ADO events. For GitHub events it uses `github` unless exactly one GitHub integration type section is configured, in which case that type is used.
 
@@ -227,20 +228,26 @@ See `openspec/specs/ignored-repos/spec.md` for the full capability contract.
 | Variable           | Required | Description                                                                                               |
 | ------------------ | -------- | --------------------------------------------------------------------------------------------------------- |
 | `SNYK_TOKEN`       | Yes      | Snyk API token for import, target removal, and integration lookup (secret; never commit)                  |
-| `ADO_PAT`          | Yes      | Azure DevOps PAT for Git REST enrichment when lifecycle events omit default branch (secret; never commit) |
+| `ADO_PAT`          | With one or more `scopeMapping.azure-repos` entries | Azure DevOps PAT for Git REST enrichment when lifecycle events omit default branch (secret; never commit) |
 | `ADO_ORGANIZATION` | No       | Overrides `ado.organization` from config                                                                  |
 | `ADO_HOST`         | No       | Overrides `ado.host` from config                                                                          |
 
 
-The worker fails fast at startup when the config file is missing, invalid, lacks required settings after the config/env merge, or when `SNYK_TOKEN` or `ADO_PAT` is unset.
+The worker fails fast at startup when the config file is missing, invalid, lacks required settings after the config/env merge, or when `SNYK_TOKEN` is unset. It also fails at startup when `scopeMapping.azure-repos` is non-empty and either `ado.organization` or `ADO_PAT` is unset. Without `azure-repos` mappings, neither ADO setting is required and no ADO API client is created.
 
 ### ADO PAT permissions
 
-`ADO_PAT` is used only to resolve repository default branches when lifecycle events omit `defaultBranch`. The worker calls:
+`ADO_PAT` is used only to resolve repository default branches when lifecycle events and sync state omit `defaultBranch`. The worker calls:
 
 `GET https://{ado.host}/{ado.organization}/_apis/git/repositories/{repositoryId}?api-version=7.1`
 
 Configure the PAT with the minimum scopes below. Store it in Key Vault or container secrets; never commit it.
+
+If an ADO event is routed through `defaultSnykOrgId` in a deployment without
+explicit `azure-repos` mappings, it can proceed when its branch is present in
+the event or sync state. If enrichment is required, that message is
+dead-lettered with a configuration error rather than guessing a branch or
+stopping the worker.
 
 
 | Setting          | Requirement                                                                                                                                                                                 |
@@ -325,7 +332,7 @@ Repository rows are written when import starts (`pending`) and updated when impo
 
 ### ADO lifecycle behaviour (mapped scopes)
 
-Snyk import payloads **require** a `branch` value. When the normalized lifecycle event includes `defaultBranch` (for example `repo.created` with audit `DefaultBranch`, or `repo.default_branch_changed`), that value is used. Otherwise the worker calls the ADO Git REST API (`GET .../_apis/git/repositories/{repositoryId}`) with `ADO_PAT` to resolve the repository default branch before starting import. Sync-state `defaultBranch` is set to the branch used for import, including values resolved via ADO REST.
+Snyk import payloads **require** a `branch` value. When the normalized lifecycle event includes `defaultBranch` (for example `repo.created` with audit `DefaultBranch`, or `repo.default_branch_changed`), that value is used. Otherwise the worker uses the branch already in sync state. If neither source has a branch and ADO is configured through an explicit `azure-repos` mapping, the worker calls the ADO Git REST API (`GET .../_apis/git/repositories/{repositoryId}`) with `ADO_PAT` before starting import. Without a configured ADO client, the message is dead-lettered with a configuration error rather than guessing a branch. Sync-state `defaultBranch` is set to the branch used for import, including values resolved via ADO REST.
 
 
 | Event                           | Actions                                                                                                                                                                          |
