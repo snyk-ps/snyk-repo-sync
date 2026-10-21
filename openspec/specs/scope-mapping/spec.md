@@ -3,7 +3,7 @@
 Resolve provider scopes (ADO project or GitHub org) to Snyk organizations and integrations via operator configuration and the Snyk API. Scope mapping replaces manual Table Storage `_meta` onboarding.
 ## Requirements
 ### Requirement: Config-based scope to Snyk org mapping
-Operators MUST declare scope-to-Snyk-org mappings in operator config (`config.yaml`). ADO mappings MUST use ADO project name as the lookup key under the `azure-repos` integration type section. GitHub mappings MUST use GitHub organization name (login) as the lookup key under a GitHub integration type section (`github`, `github-cloud`, `github-server`, or `github-enterprise`).
+Operators MUST declare scope-to-Snyk-org mappings in operator config (`config.yaml`). ADO mappings MUST use ADO project name as the lookup key under the `azure-repos` integration type section. GitHub mappings MUST use GitHub organization name (login) as the lookup key under a GitHub integration type section (`github`, `github-cloud-app`, `github-server-app`, or `github-enterprise`).
 
 The worker MUST load and validate scope mapping entries at startup. Each mapping entry MUST include a non-empty `snykOrgId`. Duplicate lookup keys within a source MUST cause startup failure. Legacy top-level key `ado` MUST be rejected at startup.
 
@@ -30,11 +30,11 @@ Scope mapping sections MUST be keyed by Snyk integration type, not provider sour
 | ----------- | --------------- | ----------- |
 | `azure-repos` | ADO | `projectName`, `snykOrgId`, optional `snykIntegrationId` |
 | `github` | GitHub | `orgName`, `snykOrgId`, optional `snykIntegrationId` |
-| `github-cloud` | GitHub | same as `github` |
-| `github-server` | GitHub | same as `github` |
+| `github-cloud-app` | GitHub | same as `github` |
+| `github-server-app` | GitHub | same as `github` |
 | `github-enterprise` | GitHub | same as `github` |
 
-The integration type used for Snyk API lookup MUST be the section key. Unknown section keys MUST cause startup failure.
+The integration type used for Snyk API lookup MUST be the section key. Unknown section keys, including `github-cloud` and `github-server`, MUST cause startup failure.
 
 When `defaultSnykOrgId` is used without an explicit scope entry, the worker MUST use `azure-repos` for ADO events. For GitHub events it MUST use `github` unless exactly one GitHub integration type section is configured, in which case that type MUST be used.
 
@@ -45,6 +45,22 @@ When `defaultSnykOrgId` is used without an explicit scope entry, the worker MUST
 #### Scenario: GitHub entry under github-enterprise section
 - **WHEN** a GitHub scope mapping entry is listed under `scopeMapping.github-enterprise`
 - **THEN** the worker resolves the integration whose Snyk type is `github-enterprise`
+
+#### Scenario: GitHub Cloud App section
+- **WHEN** a GitHub org mapping is listed under `scopeMapping.github-cloud-app`
+- **THEN** the worker uses `github-cloud-app` for Snyk integration lookup
+
+#### Scenario: GitHub Server App section
+- **WHEN** a GitHub org mapping is listed under `scopeMapping.github-server-app`
+- **THEN** the worker uses `github-server-app` for Snyk integration lookup
+
+#### Scenario: Obsolete GitHub Cloud key
+- **WHEN** operator config contains `scopeMapping.github-cloud`
+- **THEN** the worker exits at startup with a clear error that lists `github-cloud-app` as an allowed key
+
+#### Scenario: Obsolete GitHub Server key
+- **WHEN** operator config contains `scopeMapping.github-server`
+- **THEN** the worker exits at startup with a clear error that lists `github-server-app` as an allowed key
 
 #### Scenario: Invalid top-level scope mapping key
 - **WHEN** operator config contains `scopeMapping.ado` or an unsupported integration type key

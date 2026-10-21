@@ -29,4 +29,4 @@
 
 ## 6. Archive
 
-- [ ] 6.1 Merge `openspec/specs/` only when archiving: do not copy or merge `openspec/changes/conditional-ado-pat-and-github-app-types/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive conditional-ado-pat-and-github-app-types` (or project equivalent) to fold deltas into canonical specs.
+- [x] 6.1 Merge `openspec/specs/` only when archiving: do not copy or merge `openspec/changes/conditional-ado-pat-and-github-app-types/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive conditional-ado-pat-and-github-app-types` (or project equivalent) to fold deltas into canonical specs.
