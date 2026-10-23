@@ -21,7 +21,7 @@ cp data/config.yaml.example data/config.yaml
 
 | Key                                  | Required | Default         | Description                                                                                             |
 | ------------------------------------ | -------- | --------------- | ------------------------------------------------------------------------------------------------------- |
-| `messaging.transport`                | No       | `serviceBus`    | `serviceBus` or `kafka`. `kafka` is not runnable until the event-connector REST contract exists         |
+| `messaging.transport`                | No       | `serviceBus`    | `serviceBus` or `kafka`. Snyk recommends `serviceBus`                                                   |
 | `serviceBus.fullyQualifiedNamespace` | Yes for `serviceBus` | —     | Service Bus namespace FQDN, e.g. `mynamespace.servicebus.windows.net`. Ignored when transport is `kafka` |
 | `serviceBus.queueName`               | Yes for `serviceBus` | —     | Pre-provisioned queue name. Ignored when transport is `kafka`                                          |
 | `serviceBus.receiveMaxWaitSeconds`   | No       | `5`             | Maximum seconds to wait for a message on each receive poll; does **not** stop the worker when the queue is idle |
@@ -29,6 +29,10 @@ cp data/config.yaml.example data/config.yaml
 | `storageQueue.poisonQueueName`       | No       | `{queueName}-poison` | Pre-provisioned poison queue in the same storage account                                          |
 | `storageQueue.receiveMaxWaitSeconds` | No       | `5`             | Idle poll wait for the storage queue. Integer from 1 to 300. Does **not** stop the worker              |
 | `storageQueue.visibilityTimeoutSeconds` | No    | `60`            | Lock duration while a storage-queue message is processed. Integer from 1 to 604800                     |
+| `http.bindHost`                      | No       | `0.0.0.0`       | Kafka only. HTTP listener bind host                                                                      |
+| `http.port`                          | No       | `8080`          | Kafka only. HTTP listener port from 1 through 65535                                                      |
+| `http.maxRequestBodyBytes`           | No       | `1048576`       | Kafka only. Positive maximum request-body size                                                           |
+| `http.processingConcurrency`         | No       | `1`             | Kafka only. Concurrent request-processing limit from 1 through 100                                      |
 | `syncState.storageAccountEndpoint`   | Yes      | —               | Table service URL, e.g. `https://myaccount.table.core.windows.net`. On `kafka`, the queue URL is this host with `.table.` replaced by `.queue.` |
 | `syncState.tableName`                | No       | `SnykSyncState` | Sync-state table name                                                                                   |
 | `ado.organization`                   | With one or more `scopeMapping.azure-repos` entries | — | ADO organization name used for Git REST enrichment (e.g. `contoso` for `https://dev.azure.com/contoso`) |
@@ -42,8 +46,7 @@ Example:
 ado:
   organization: contoso
 
-# messaging.transport defaults to serviceBus. Do not set kafka until the
-# event-connector REST API is implemented; the worker exits at startup.
+# messaging.transport defaults to serviceBus.
 # messaging:
 #   transport: serviceBus
 
@@ -63,6 +66,13 @@ syncState:
 #   # poisonQueueName: repo-sync-followups-poison
 #   # receiveMaxWaitSeconds: 5
 #   # visibilityTimeoutSeconds: 60
+#
+# The event connector sends GitHub events to POST /github-events.
+# http:
+#   bindHost: 0.0.0.0
+#   port: 8080
+#   maxRequestBodyBytes: 1048576
+#   processingConcurrency: 1
 
 scopeMapping:
   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"  # optional
@@ -80,7 +90,13 @@ Individual settings MAY be overridden by environment variables; **env values tak
 
 `serviceBus` (the default) puts GitHub events, ADO events, and internal follow-ups (`import_poll`, `lifecycle_deferred`) on one Service Bus queue.
 
-`kafka` is a GitHub deployment path. GitHub events would be consumed from a Kafka topic through an event-connector REST API. That client is **not implemented**; `worker run` exits with an error that the REST contract is pending, and it does not fall back to Service Bus. ADO audit events stay on the Service Bus path. Follow-ups would go to the storage queue named by `storageQueue.queueName`, in the **same storage account** as `syncState.storageAccountEndpoint`. The worker derives `https://{account}.queue.{suffix}` from the table URL and does not accept a second account. Provision the queue and the poison queue yourself; the worker does not create them. The storage queue carries follow-up JSON only, not webhook bodies.
+`kafka` is a GitHub-only deployment path. The event connector reads Kafka and sends provider-native JSON to `POST /github-events`. The worker processes each request synchronously. It returns `204 No Content` only after lifecycle processing and durable scheduling of every requested follow-up succeed. The connector must retry every non-2xx response according to its policy.
+
+The endpoint has no application authentication. Do not expose it publicly. Provide a customer-managed private route that allows only the event connector to reach the configured host and port. TLS termination and network policy are deployment responsibilities.
+
+The endpoint accepts existing `renamed`, `edited`, and `deleted` payload shapes. It rejects `created`, ADO payloads, and `updated` until a later fixture-driven change defines the revised connector contracts, normalization, and `updated` Snyk Organization mapping. Do not route those deferred shapes to this endpoint.
+
+On `kafka`, `worker run` starts the HTTP listener and the Storage Queue follow-up consumer. It does not open Service Bus. The worker sends `import_poll` and `lifecycle_deferred` follow-ups to `storageQueue.queueName` in the same storage account as `syncState.storageAccountEndpoint`. It derives `https://{account}.queue.{suffix}` from the table URL and does not accept a second account. Provision the queue and poison queue. The worker does not create them, and it never copies inbound GitHub bodies to the Storage Queue.
 
 ### Scope mapping (`scopeMapping`)
 
@@ -220,6 +236,10 @@ See `openspec/specs/ignored-repos/spec.md` for the full capability contract.
 | `STORAGE_QUEUE_POISON_NAME`            | `storageQueue.poisonQueueName`       |
 | `STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS` | `storageQueue.receiveMaxWaitSeconds` |
 | `STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS` | `storageQueue.visibilityTimeoutSeconds` |
+| `HTTP_BIND_HOST`                       | `http.bindHost`                     |
+| `HTTP_PORT`                            | `http.port`                         |
+| `HTTP_MAX_REQUEST_BODY_BYTES`          | `http.maxRequestBodyBytes`          |
+| `HTTP_PROCESSING_CONCURRENCY`          | `http.processingConcurrency`        |
 | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT`  | `syncState.storageAccountEndpoint`   |
 | `SYNC_STATE_TABLE_NAME`                | `syncState.tableName`                |
 
@@ -291,7 +311,7 @@ uv run python src/main.py worker run --config /config/config.yaml
 
 | Command                    | Purpose                                                                                                                                                                          |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `worker run`               | Long-running Service Bus consumer; normalizes ADO lifecycle events, syncs mapped repos via Snyk (async import jobs), and schedules internal follow-up messages on the same queue |
+| `worker run`               | Runs the selected transport: Service Bus consumption, or Kafka-mode GitHub HTTP ingress with Storage Queue follow-up consumption |
 | `worker run --config PATH` | Use a custom operator config file path                                                                                                                                           |
 
 

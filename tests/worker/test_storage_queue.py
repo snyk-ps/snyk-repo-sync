@@ -1,6 +1,7 @@
 """Tests for the Azure Storage queue follow-up transport."""
 
 import json
+import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -9,7 +10,7 @@ import pytest
 from config.settings import StorageQueueSettings
 from tests.conftest import make_worker_settings
 from worker.followup import ScheduledFollowUp, build_import_poll_message
-from worker.handler import HandleResult
+from worker.handler import HandleResult, ProcessingOutcome
 from worker.storage_queue import (
     MAX_DEQUEUE_COUNT_REASON,
     StorageQueueTransport,
@@ -47,6 +48,7 @@ class FakeQueue:
         self.sent: list[tuple[str, int | None]] = []
         self.deleted: list[tuple[str, str]] = []
         self.receive_calls: list[dict[str, Any]] = []
+        self.operations: list[str] = []
 
     def receive_messages(self, **kwargs: Any) -> list[FakeMessage]:
         self.receive_calls.append(kwargs)
@@ -55,9 +57,11 @@ class FakeQueue:
         return [self.messages.pop(0)]
 
     def send_message(self, content: str, *, visibility_timeout: int | None = None) -> None:
+        self.operations.append("send")
         self.sent.append((content, visibility_timeout))
 
     def delete_message(self, message_id: str, pop_receipt: str) -> None:
+        self.operations.append("delete")
         self.deleted.append((message_id, pop_receipt))
 
 
@@ -135,7 +139,7 @@ def test_dequeue_count_exhausted_skips_handling() -> None:
     transport, queue, poison = _transport(FakeQueue([message]))
     settings = make_worker_settings()
 
-    with patch("worker.storage_queue.handle_queue_message") as handle:
+    with patch("worker.storage_queue.process_message_body") as handle:
         transport.process(message, settings=settings)
 
     handle.assert_not_called()
@@ -149,7 +153,7 @@ def test_github_webhook_body_is_invalid_message() -> None:
     transport, _queue, poison = _transport()
     settings = make_worker_settings()
 
-    with patch("worker.storage_queue.handle_queue_message") as handle:
+    with patch("worker.storage_queue.process_message_body") as handle:
         transport.process(message, settings=settings)
 
     handle.assert_not_called()
@@ -172,8 +176,8 @@ def test_import_poll_is_deleted_on_success() -> None:
     settings = make_worker_settings()
 
     with patch(
-        "worker.storage_queue.handle_queue_message",
-        return_value=HandleResult(),
+        "worker.storage_queue.process_message_body",
+        return_value=ProcessingOutcome(status="completed", result=HandleResult()),
     ) as handle:
         transport.process(message, settings=settings)
 
@@ -199,12 +203,42 @@ def test_import_poll_schedules_the_same_json_body() -> None:
     followup = ScheduledFollowUp(body=body, delay_seconds=30)
 
     with patch(
-        "worker.storage_queue.handle_queue_message",
-        return_value=HandleResult(scheduled_followups=(followup,)),
+        "worker.storage_queue.process_message_body",
+        return_value=ProcessingOutcome(
+            status="completed",
+            result=HandleResult(scheduled_followups=(followup,)),
+        ),
     ):
         transport.process(message, settings=settings)
 
     assert queue.sent == [(json.dumps(body), 30)]
+    assert queue.operations == ["send", "delete"]
+
+
+def test_followup_send_failure_leaves_source_message_for_retry() -> None:
+    message = FakeMessage(json.dumps({"syncPhase": "import_poll"}))
+    transport, queue, _poison = _transport()
+    followup = ScheduledFollowUp(
+        body={"syncPhase": "import_poll", "retryCount": 1},
+        delay_seconds=30,
+    )
+
+    def fail_send(content: str, *, visibility_timeout: int | None = None) -> None:
+        del content, visibility_timeout
+        raise RuntimeError("queue unavailable")
+
+    queue.send_message = fail_send
+    with patch(
+        "worker.storage_queue.process_message_body",
+        return_value=ProcessingOutcome(
+            status="completed",
+            result=HandleResult(scheduled_followups=(followup,)),
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="queue unavailable"):
+            transport.process(message, settings=make_worker_settings())
+
+    assert queue.deleted == []
 
 
 def test_dead_letter_logs_when_source_delete_fails_after_poison_copy() -> None:
@@ -249,6 +283,16 @@ def test_idle_poll_waits_and_does_not_exit() -> None:
         transport.run(settings=make_worker_settings(), sleep=sleep)
 
     assert waits == [5, 5]
+
+
+def test_stop_event_ends_idle_polling() -> None:
+    transport, _queue, _poison = _transport()
+    stop_event = threading.Event()
+    stop_event.set()
+
+    transport.run(settings=make_worker_settings(), stop_event=stop_event)
+
+    assert _queue.receive_calls == []
 
 
 def test_open_storage_queue_transport_binds_both_queues() -> None:

@@ -39,4 +39,5 @@ def make_worker_settings(**overrides) -> WorkerSettings:
         ignored_repos=overrides.get("ignored_repos", defaults.ignored_repos),
         transport=overrides.get("transport", defaults.transport),
         storage_queue=overrides.get("storage_queue", defaults.storage_queue),
+        http=overrides.get("http", defaults.http),
     )

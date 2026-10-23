@@ -10,18 +10,14 @@ from azure.servicebus import ServiceBusClient, ServiceBusReceivedMessage
 
 from config.errors import ConfigError
 from config.settings import WorkerSettings
-from snyk.client import SnykApiError
 from sync_state import SyncStateStore
-from worker.event_source import open_github_event_source
 from worker.followup_transport import (
     FollowUpTransport,
     ServiceBusFollowUpTransport,
     message_id_of,
 )
-from worker.handler import HandleResult, handle_queue_message
+from worker.handler import HandleResult, process_message_body
 from worker.lifecycle import WorkerSyncDependencies
-from worker.message import INVALID_MESSAGE_REASON, MessageParseError
-from worker.normalize import INVALID_NORMALIZATION_REASON, NormalizationError
 
 logger = logging.getLogger(__name__)
 
@@ -115,49 +111,28 @@ def process_message(
 ) -> None:
     """Process one queue message: parse, complete, schedule follow-ups, or dead-letter."""
     body = _message_body(message)
-    try:
-        result = handle_queue_message(
-            body,
-            scope_mapping=settings.scope_mapping,
-            sync_deps=sync_deps,
+    outcome = process_message_body(
+        body,
+        scope_mapping=settings.scope_mapping,
+        sync_deps=sync_deps,
+    )
+    if outcome.status == "failed":
+        logger.error(
+            "Dead-lettering message after processing failure kind=%s reason=%s: %s",
+            outcome.failure_kind,
+            outcome.reason,
+            outcome.description,
         )
-    except MessageParseError as exc:
-        logger.warning("Dead-lettering message with invalid queue message: %s", exc)
         _dead_letter(
             message,
             transport,
-            reason=INVALID_MESSAGE_REASON,
-            description=str(exc),
-        )
-        return
-    except NormalizationError as exc:
-        logger.warning("Dead-lettering message with invalid normalization: %s", exc)
-        _dead_letter(
-            message,
-            transport,
-            reason=INVALID_NORMALIZATION_REASON,
-            description=str(exc),
-        )
-        return
-    except ConfigError as exc:
-        logger.error("Dead-lettering message after configuration failure: %s", exc)
-        _dead_letter(
-            message,
-            transport,
-            reason="ConfigurationError",
-            description=str(exc),
-        )
-        return
-    except SnykApiError as exc:
-        logger.error("Dead-lettering message after Snyk API failure: %s", exc)
-        _dead_letter(
-            message,
-            transport,
-            reason="SnykApiError",
-            description=str(exc),
+            reason=outcome.reason or "Unknown",
+            description=outcome.description,
         )
         return
 
+    assert outcome.result is not None
+    result = outcome.result
     _settle_message(message, transport, result)
     _schedule_followups(result.scheduled_followups, transport)
 
@@ -182,8 +157,6 @@ class WorkerConsumer:
 
     def run(self) -> None:
         """Receive and process messages until interrupted."""
-        if self._settings.transport == "kafka":
-            open_github_event_source()
         service_bus = self._settings.service_bus
         if service_bus is None:
             raise ConfigError("serviceBus settings are required for the serviceBus transport")

@@ -6,18 +6,17 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from threading import Event
 from typing import Any
 
 from azure.identity import DefaultAzureCredential
 from azure.storage.queue import QueueServiceClient
 
 from config.settings import MAX_VISIBILITY_TIMEOUT_SECONDS, StorageQueueSettings, WorkerSettings
-from snyk.client import SnykApiError
 from worker.followup_transport import message_id_of
-from worker.handler import handle_queue_message
+from worker.handler import process_message_body
 from worker.lifecycle import WorkerSyncDependencies
-from worker.message import INVALID_MESSAGE_REASON, MessageParseError
-from worker.normalize import INVALID_NORMALIZATION_REASON, NormalizationError
+from worker.message import INVALID_MESSAGE_REASON
 
 logger = logging.getLogger(__name__)
 
@@ -118,39 +117,24 @@ class StorageQueueTransport:
             )
             return
 
-        try:
-            result = handle_queue_message(
-                text,
-                scope_mapping=settings.scope_mapping,
-                sync_deps=sync_deps,
-            )
-        except MessageParseError as exc:
-            logger.warning("Dead-lettering message with invalid queue message: %s", exc)
-            self.dead_letter(message, reason=INVALID_MESSAGE_REASON, description=str(exc))
-            return
-        except NormalizationError as exc:
-            logger.warning("Dead-lettering message with invalid normalization: %s", exc)
+        outcome = process_message_body(
+            text,
+            scope_mapping=settings.scope_mapping,
+            sync_deps=sync_deps,
+        )
+        if outcome.status == "failed":
             self.dead_letter(
                 message,
-                reason=INVALID_NORMALIZATION_REASON,
-                description=str(exc),
+                reason=outcome.reason or "Unknown",
+                description=outcome.description,
             )
-            return
-        except SnykApiError as exc:
-            logger.error("Dead-lettering message after Snyk API failure: %s", exc)
-            self.dead_letter(message, reason="SnykApiError", description=str(exc))
             return
 
-        if result.settlement == "dead_letter":
-            self.dead_letter(
-                message,
-                reason=result.dead_letter_reason or "Unknown",
-                description=result.dead_letter_description,
-            )
-        else:
-            self.complete(message)
+        assert outcome.result is not None
+        result = outcome.result
         for followup in result.scheduled_followups:
             self.schedule(followup.body, delay_seconds=followup.delay_seconds)
+        self.complete(message)
 
     def run(
         self,
@@ -158,15 +142,21 @@ class StorageQueueTransport:
         settings: WorkerSettings,
         sync_deps: WorkerSyncDependencies | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        stop_event: Event | None = None,
     ) -> None:
         """Poll until interrupted. An empty queue waits and does not stop the loop."""
         wait_seconds = self._settings.receive_max_wait_seconds
-        while True:
+        while stop_event is None or not stop_event.is_set():
             messages = self.receive()
             if not messages:
-                sleep(wait_seconds)
+                if stop_event is None:
+                    sleep(wait_seconds)
+                else:
+                    stop_event.wait(wait_seconds)
                 continue
             for message in messages:
+                if stop_event is not None and stop_event.is_set():
+                    return
                 self.process(message, settings=settings, sync_deps=sync_deps)
 
     def _delete(self, message: Any) -> None:
