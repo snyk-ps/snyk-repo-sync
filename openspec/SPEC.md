@@ -5,7 +5,8 @@ Canonical specifications for this project. Each capability has a dedicated spec 
 | Capability | Path | Description |
 | --- | --- | --- |
 | ado-provisioning | `openspec/specs/ado-provisioning/spec.md` | Provision ADO audit stream with Event Grid subscription filters and direct Service Bus delivery for Git repository lifecycle events (operator guide in INGESTION.md). |
-| event-ingestion | `openspec/specs/event-ingestion/spec.md` | Deliver ADO Event Grid JSON and GitHub webhook JSON to a Service Bus queue, or consume GitHub events from the Kafka event connector; no transport envelope; lifecycle normalization owned by the worker. |
+| event-ingestion | `openspec/specs/event-ingestion/spec.md` | Deliver ADO Event Grid JSON and GitHub webhook JSON to a Service Bus queue, or receive connector-pushed GitHub events at private HTTP ingress; no transport envelope; lifecycle normalization owned by the worker. |
+| github-events-http-ingress | `openspec/specs/github-events-http-ingress/spec.md` | Private `POST /github-events` ingress, synchronous acknowledgement, Kafka event boundary, and customer-managed private-network access without application authentication. |
 | github-provisioning | `openspec/specs/github-provisioning/spec.md` | Provision GitHub organization webhooks so repository lifecycle events reach the webhook ingress endpoint. |
 | github-webhook-ingestion | `openspec/specs/github-webhook-ingestion/spec.md` | Receive GitHub organization repository webhooks on customer-owned ingress, validate authenticity, deduplicate deliveries, and publish raw webhook JSON to the Service Bus queue. |
 | ignored-repos | `openspec/specs/ignored-repos/spec.md` | Ignore-policy file (YAML/JSON) with explicit repos and name patterns; event-time enforcement and background reconciliation. |
