@@ -1,38 +1,47 @@
 # Event ingestion setup
 
-Operator guide for provisioning **customer-owned queue infrastructure** and **event ingress** that delivers repository lifecycle events to the shared Service Bus queue. The worker in this repository only **consumes** that queue; it does not create Service Bus resources or Event Grid topics.
+Operator guide for provisioning customer-owned event ingress and queue infrastructure. Service Bus is the default and recommended transport. Kafka deployments use private connector-pushed HTTP ingress and an Azure Storage Queue for internal follow-ups.
 
 For worker configuration (operator config file, RBAC, queue message shapes), see **[CONFIGURATION.md](CONFIGURATION.md)**. After queue and ingress are ready, deploy the worker per **[README § Deployment](README.md#deployment)**. Canonical requirements live in `openspec/specs/event-ingestion/spec.md` and `openspec/specs/ado-provisioning/spec.md`.
 
 ## Architecture
 
-Repository lifecycle events reach **one pre-provisioned Service Bus queue** via ADO audit stream and GitHub organization webhooks. The worker normalizes queue messages and performs Snyk sync.
+Repository lifecycle events reach the worker through the selected transport. Service Bus carries ADO, GitHub, and internal follow-up messages. On the Kafka path, an event connector sends GitHub events to the worker over HTTP, and an Azure Storage Queue carries internal follow-ups.
 
 ```mermaid
 flowchart LR
-  subgraph ado [Azure DevOps org]
-    AS[Audit stream<br/>Git repo lifecycle]
+  subgraph ado["Azure DevOps Organization"]
+    AS["Audit stream<br/>Git repo lifecycle"]
   end
 
-  subgraph ingress [Azure Event Grid]
-    EG[Custom topic]
-    SUB[Subscription<br/>subject + ActionId filters]
+  subgraph ingress["Azure Event Grid"]
+    EG["Custom topic"]
+    SUB["Subscription<br/>subject and ActionId filters"]
   end
 
-  subgraph gh [GitHub org]
-    GHW[Org webhooks]
+  subgraph gh["GitHub Organization"]
+    GHW["Organization webhooks"]
   end
 
-  GWR[GitHub webhook receiver]
-  SB[(Service Bus queue)]
-  W[Worker Container App]
+  subgraph kafka_path["Kafka path"]
+    K{{"Kafka topic"}}
+    EC["Event connector"]
+    SQ[("Storage Queue<br/>internal follow-ups")]
+  end
+
+  GWR["GitHub webhook receiver"]
+  SB[("Service Bus queue")]
+  W["Worker Container App"]
 
   AS --> EG
   EG --> SUB
-  SUB -->|Event Grid JSON| SB
+  SUB -->|"Event Grid JSON"| SB
   GHW --> GWR
-  GWR -->|webhook JSON| SB
+  GWR -->|"webhook JSON"| SB
   SB --> W
+  K --> EC
+  EC -->|"private POST /github-events"| W
+  W -->|"schedule and consume follow-ups"| SQ
 ```
 
 > **Latency note:** ADO audit events are batched by Azure DevOps and typically delivered within **30 minutes or less**. This is expected behavior, not a misconfiguration. GitHub webhook delivery remains near-real-time.
@@ -48,13 +57,19 @@ All ADO Git repository lifecycle events use the **audit stream** exclusively. Gi
 
 ### Alternate path: Kafka events and a storage queue
 
-Some GitHub deployments will set `messaging.transport: kafka`. On that path:
+Some GitHub deployments set `messaging.transport: kafka`. On that path:
 
-- GitHub lifecycle events are **consumed only** from a Kafka topic, through an event connector's REST API over HTTP. The worker does not publish follow-ups back to Kafka.
+- The event connector reads GitHub lifecycle events from Kafka and sends the provider-native JSON body to `POST /github-events`.
+- The worker returns `204 No Content` only after synchronous lifecycle processing and durable follow-up scheduling succeed. The connector must retry every non-2xx response.
 - `import_poll` and `lifecycle_deferred` messages go to a pre-provisioned Azure Storage queue in the **same storage account** as the sync-state table. Provision that queue and a poison queue (`{queueName}-poison` unless overridden). The worker does not create them.
 - ADO audit ingestion stays on the Service Bus path above.
+- The worker does not publish to Kafka or copy inbound GitHub bodies to the Storage Queue.
 
-**This path is not runnable yet.** The event-connector REST contract is still pending, and the worker exits at startup when `messaging.transport` is `kafka`. Do not point a deployment at it until that client exists. There is no KEDA scaler guidance for the storage queue; keep min replicas at 1.
+The endpoint has no application authentication. Do not create a public route. Configure customer-managed private networking so only the event connector can reach the configured `http.bindHost` and `http.port`. Terminate TLS and enforce source restrictions in the deployment network. Set the connector request timeout longer than the worker's initial synchronous processing time.
+
+The endpoint accepts the existing `renamed`, `edited`, and `deleted` payload shapes. It rejects `created` and ADO payloads. It also rejects `updated` and revised connector payloads until a later fixture-driven change defines their contracts, normalization, and `updated` Snyk Organization mapping. Do not route those deferred event shapes to this endpoint.
+
+Assign the worker identity **Storage Queue Data Contributor** on the storage account and **Storage Table Data Contributor** on the table or account. Configure `storageQueue` and `http` as described in **[CONFIGURATION.md](CONFIGURATION.md)**. Keep minimum replicas at one because this guide does not define a Storage Queue scaler.
 
 The rest of this document is the Service Bus path.
 

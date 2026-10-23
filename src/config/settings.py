@@ -30,17 +30,21 @@ STORAGE_QUEUE_NAME_ENV = "STORAGE_QUEUE_NAME"
 STORAGE_QUEUE_POISON_NAME_ENV = "STORAGE_QUEUE_POISON_NAME"
 STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS_ENV = "STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS"
 STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS_ENV = "STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS"
+HTTP_BIND_HOST_ENV = "HTTP_BIND_HOST"
+HTTP_PORT_ENV = "HTTP_PORT"
+HTTP_MAX_REQUEST_BODY_BYTES_ENV = "HTTP_MAX_REQUEST_BODY_BYTES"
+HTTP_PROCESSING_CONCURRENCY_ENV = "HTTP_PROCESSING_CONCURRENCY"
 
 DEFAULT_RECEIVE_MAX_WAIT_SECONDS = 5
 MAX_RECEIVE_MAX_WAIT_SECONDS = 300
 DEFAULT_VISIBILITY_TIMEOUT_SECONDS = 60
 MAX_VISIBILITY_TIMEOUT_SECONDS = 604800
+DEFAULT_HTTP_BIND_HOST = "0.0.0.0"
+DEFAULT_HTTP_PORT = 8080
+DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES = 1048576
+DEFAULT_HTTP_PROCESSING_CONCURRENCY = 1
 
 MessageTransport = Literal["serviceBus", "kafka"]
-EVENT_CONNECTOR_PENDING_MESSAGE = (
-    "GitHub event connector is not implemented; "
-    "the event-connector REST API contract is pending"
-)
 
 _QUEUE_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9]|-(?!-)){1,61}[a-z0-9]$")
 
@@ -74,6 +78,16 @@ class StorageQueueSettings:
 
 
 @dataclass(frozen=True)
+class HttpSettings:
+    """Private HTTP ingress settings for the kafka transport."""
+
+    bind_host: str = DEFAULT_HTTP_BIND_HOST
+    port: int = DEFAULT_HTTP_PORT
+    max_request_body_bytes: int = DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES
+    processing_concurrency: int = DEFAULT_HTTP_PROCESSING_CONCURRENCY
+
+
+@dataclass(frozen=True)
 class WorkerSettings:
     """Combined worker configuration."""
 
@@ -85,6 +99,7 @@ class WorkerSettings:
     ignored_repos: IgnoredReposSettings | None = None
     transport: MessageTransport = "serviceBus"
     storage_queue: StorageQueueSettings | None = None
+    http: HttpSettings | None = None
 
 
 def _require_non_empty(value: object, label: str) -> str:
@@ -126,6 +141,22 @@ def _parse_receive_max_wait_seconds(value: object, *, label: str) -> int:
         maximum=MAX_RECEIVE_MAX_WAIT_SECONDS,
         default=DEFAULT_RECEIVE_MAX_WAIT_SECONDS,
     )
+
+
+def _parse_positive_int(value: object, *, label: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ConfigError(f"Missing or invalid required setting: {label}")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        parsed = int(value.strip())
+    else:
+        raise ConfigError(f"Missing or invalid required setting: {label}")
+    if parsed < 1:
+        raise ConfigError(f"{label} must be a positive integer, got {parsed!r}")
+    return parsed
 
 
 def _parse_transport(value: object) -> MessageTransport:
@@ -246,6 +277,43 @@ def _parse_storage_queue_settings(
     )
 
 
+def _parse_http_settings(
+    http_raw: Mapping[str, object],
+    env: Mapping[str, str],
+) -> HttpSettings:
+    return HttpSettings(
+        bind_host=_require_non_empty(
+            env.get(HTTP_BIND_HOST_ENV, http_raw.get("bindHost", DEFAULT_HTTP_BIND_HOST)),
+            f"http.bindHost or {HTTP_BIND_HOST_ENV}",
+        ),
+        port=_parse_bounded_int(
+            env.get(HTTP_PORT_ENV, http_raw.get("port")),
+            label=f"http.port or {HTTP_PORT_ENV}",
+            minimum=1,
+            maximum=65535,
+            default=DEFAULT_HTTP_PORT,
+        ),
+        max_request_body_bytes=_parse_positive_int(
+            env.get(
+                HTTP_MAX_REQUEST_BODY_BYTES_ENV,
+                http_raw.get("maxRequestBodyBytes"),
+            ),
+            label=f"http.maxRequestBodyBytes or {HTTP_MAX_REQUEST_BODY_BYTES_ENV}",
+            default=DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES,
+        ),
+        processing_concurrency=_parse_bounded_int(
+            env.get(
+                HTTP_PROCESSING_CONCURRENCY_ENV,
+                http_raw.get("processingConcurrency"),
+            ),
+            label=f"http.processingConcurrency or {HTTP_PROCESSING_CONCURRENCY_ENV}",
+            minimum=1,
+            maximum=100,
+            default=DEFAULT_HTTP_PROCESSING_CONCURRENCY,
+        ),
+    )
+
+
 def load_worker_settings(
     config_path: str = DEFAULT_CONFIG_PATH,
     environ: Mapping[str, str] | None = None,
@@ -311,10 +379,15 @@ def load_worker_settings(
 
     service_bus: ServiceBusSettings | None = None
     storage_queue: StorageQueueSettings | None = None
+    http: HttpSettings | None = None
     if transport == "serviceBus":
         service_bus = _parse_service_bus_settings(service_bus_raw, env)
     else:
+        http_raw = raw.get("http") or {}
+        if not isinstance(http_raw, dict):
+            raise ConfigError("http must be a mapping")
         storage_queue = _parse_storage_queue_settings(storage_queue_raw, env, endpoint)
+        http = _parse_http_settings(http_raw, env)
 
     return WorkerSettings(
         service_bus=service_bus,
@@ -328,6 +401,7 @@ def load_worker_settings(
         ignored_repos=ignored_repos,
         transport=transport,
         storage_queue=storage_queue,
+        http=http,
     )
 
 

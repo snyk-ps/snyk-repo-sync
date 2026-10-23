@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Literal
 
+from config.errors import ConfigError
 from config.scope_mapping import (
     ResolvedScopeMapping,
     ScopeMappingSettings,
@@ -15,8 +16,15 @@ from config.scope_mapping import (
 from snyk.client import SnykApiError
 from worker.followup import ScheduledFollowUp
 from worker.lifecycle import LifecycleOutcome, WorkerSyncDependencies, process_import_poll, process_lifecycle_deferred, process_normalized_event
-from worker.message import InboundMessage, MessageParseError, QueueMessage, parse_inbound_message
+from worker.message import (
+    INVALID_MESSAGE_REASON,
+    InboundMessage,
+    MessageParseError,
+    QueueMessage,
+    parse_inbound_message,
+)
 from worker.normalize import (
+    INVALID_NORMALIZATION_REASON,
     GitHubNoLifecycleAction,
     NormalizationError,
     NormalizedEvent,
@@ -39,6 +47,76 @@ class HandleResult:
     message: QueueMessage | None = None
     normalized: NormalizedEvent | None = None
     scope_resolution: ResolvedScopeMapping | UnmappedScope | None = None
+
+
+@dataclass(frozen=True)
+class ProcessingOutcome:
+    """Transport-neutral result of processing one message body."""
+
+    status: Literal["completed", "failed"]
+    result: HandleResult | None = None
+    failure_kind: Literal[
+        "invalid_message",
+        "invalid_normalization",
+        "configuration",
+        "dependency",
+        "processing",
+    ] | None = None
+    reason: str | None = None
+    description: str | None = None
+
+
+def process_message_body(
+    body: str | bytes,
+    *,
+    scope_mapping: ScopeMappingSettings | None = None,
+    sync_deps: WorkerSyncDependencies | None = None,
+) -> ProcessingOutcome:
+    """Process a body and return an outcome independent of its inbound transport."""
+    try:
+        result = handle_queue_message(
+            body,
+            scope_mapping=scope_mapping,
+            sync_deps=sync_deps,
+        )
+    except MessageParseError as exc:
+        return ProcessingOutcome(
+            status="failed",
+            failure_kind="invalid_message",
+            reason=INVALID_MESSAGE_REASON,
+            description=str(exc),
+        )
+    except NormalizationError as exc:
+        return ProcessingOutcome(
+            status="failed",
+            failure_kind="invalid_normalization",
+            reason=INVALID_NORMALIZATION_REASON,
+            description=str(exc),
+        )
+    except ConfigError as exc:
+        return ProcessingOutcome(
+            status="failed",
+            failure_kind="configuration",
+            reason="ConfigurationError",
+            description=str(exc),
+        )
+    except SnykApiError as exc:
+        return ProcessingOutcome(
+            status="failed",
+            failure_kind="dependency",
+            reason="SnykApiError",
+            description=str(exc),
+        )
+
+    if result.settlement == "dead_letter":
+        return ProcessingOutcome(
+            status="failed",
+            result=result,
+            failure_kind="processing",
+            reason=result.dead_letter_reason or "Unknown",
+            description=result.dead_letter_description,
+        )
+    return ProcessingOutcome(status="completed", result=result)
 
 
 def handle_queue_message(

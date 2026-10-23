@@ -2,7 +2,9 @@
 
 import json
 from unittest.mock import MagicMock
+from unittest.mock import patch
 
+from config.errors import ConfigError
 from config.scope_mapping import (
     AdoScopeEntry,
     ResolvedScopeMapping,
@@ -10,7 +12,8 @@ from config.scope_mapping import (
     UnmappedScope,
 )
 from config.snyk_settings import SnykSettings, TargetRemovalSettings
-from worker.handler import handle_queue_message
+from snyk.client import SnykApiError
+from worker.handler import HandleResult, handle_queue_message, process_message_body
 from worker.lifecycle import WorkerSyncDependencies
 
 
@@ -205,3 +208,67 @@ def test_handle_ado_created_with_sync_deps_schedules_import_poll() -> None:
     assert result.settlement == "complete"
     assert len(result.scheduled_followups) == 1
     assert result.scheduled_followups[0].body["syncPhase"] == "import_poll"
+
+
+def test_process_message_body_returns_completed_for_unmapped_scope() -> None:
+    outcome = process_message_body(_ado_created_body())
+
+    assert outcome.status == "completed"
+    assert outcome.result is not None
+    assert isinstance(outcome.result.scope_resolution, UnmappedScope)
+
+
+def test_process_message_body_returns_failed_for_invalid_message() -> None:
+    outcome = process_message_body(b"{}")
+
+    assert outcome.status == "failed"
+    assert outcome.failure_kind == "invalid_message"
+    assert outcome.reason == "InvalidMessage"
+
+
+def test_process_message_body_returns_failed_for_invalid_normalization() -> None:
+    body = (
+        b'{"subject":"AzureDevOps/Auditing","eventType":"AzureDevOpsAuditEvent",'
+        b'"data":{"ActionId":"Git.RepositoryCreated","ProjectId":"proj-1"}}'
+    )
+
+    outcome = process_message_body(body)
+
+    assert outcome.status == "failed"
+    assert outcome.failure_kind == "invalid_normalization"
+    assert outcome.reason == "InvalidNormalization"
+
+
+@patch("worker.handler.handle_queue_message", side_effect=ConfigError("invalid configuration"))
+def test_process_message_body_returns_failed_for_configuration_error(_handle) -> None:
+    outcome = process_message_body(b"{}")
+
+    assert outcome.status == "failed"
+    assert outcome.failure_kind == "configuration"
+    assert outcome.reason == "ConfigurationError"
+
+
+@patch("worker.handler.handle_queue_message", side_effect=SnykApiError("Snyk unavailable"))
+def test_process_message_body_returns_failed_for_snyk_error(_handle) -> None:
+    outcome = process_message_body(b"{}")
+
+    assert outcome.status == "failed"
+    assert outcome.failure_kind == "dependency"
+    assert outcome.reason == "SnykApiError"
+
+
+@patch(
+    "worker.handler.handle_queue_message",
+    return_value=HandleResult(
+        settlement="dead_letter",
+        dead_letter_reason="ImportJobFailed",
+        dead_letter_description="retries exhausted",
+    ),
+)
+def test_process_message_body_preserves_dead_letter_reason(_handle) -> None:
+    outcome = process_message_body(b"{}")
+
+    assert outcome.status == "failed"
+    assert outcome.failure_kind == "processing"
+    assert outcome.reason == "ImportJobFailed"
+    assert outcome.description == "retries exhausted"

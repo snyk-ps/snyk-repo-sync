@@ -69,7 +69,7 @@ ADO Event Grid subscriptions that forward to Service Bus MUST use advanced filte
 ### Requirement: Worker-side native queue consumption
 On the Service Bus path, the worker application MUST consume messages from the configured Service Bus queue. The worker MUST parse native queue message bodies and infer `source` from message structure before normalization.
 
-On the Kafka path, the worker MUST consume GitHub event bodies from the event connector (when that client exists) and MUST consume internal follow-ups from the storage queue. It MUST NOT require GitHub events to be present on Service Bus.
+On the Kafka path, the worker MUST receive GitHub event bodies through connector-pushed HTTP ingress and MUST consume internal follow-ups from the storage queue. It MUST NOT require GitHub events to be present on Service Bus.
 
 #### Scenario: Worker receives Event Grid message
 - **WHEN** an Event Grid JSON message is available on the Service Bus queue and `messaging.transport` is `serviceBus`
@@ -77,22 +77,32 @@ On the Kafka path, the worker MUST consume GitHub event bodies from the event co
 
 #### Scenario: Kafka transport does not open Service Bus
 - **WHEN** the worker builds the `kafka` transport
-- **THEN** it does not construct a Service Bus client, and GitHub event intake is the event-connector source rather than the Service Bus queue
+- **THEN** it does not construct a Service Bus client, and GitHub event intake is connector-pushed HTTP ingress rather than the Service Bus queue
 
 ### Requirement: Kafka event-connector ingress
-Deployments MAY ingest GitHub repository lifecycle events from a Kafka topic through an event connector REST API over HTTP. This path is consumption only. The worker MUST NOT publish GitHub events or internal follow-up messages to Kafka.
+Deployments MAY ingest GitHub repository lifecycle events from a Kafka topic when an event connector relays them by HTTP POST to the application's `/github-events` endpoint. This path is consumption only. The worker MUST NOT publish GitHub events or internal follow-up messages to Kafka.
 
-On this path the message body, once the connector delivers it, MUST be the same GitHub JSON the Service Bus path already accepts (raw webhook JSON or parsed repository event JSON). The worker MUST NOT require a transport envelope.
+On this path an already-supported message body MUST be the same GitHub JSON the Service Bus path accepts (raw webhook JSON or parsed repository event JSON), with no transport envelope. Revised connector payload contracts, including `updated` details used for Snyk organization mapping, MUST remain out of scope until a subsequent fixture-driven normalization change.
 
-The HTTP client MUST NOT be implemented in this change. The worker MUST NOT invent a base URL, authentication scheme, poll interval, or ack format. When `messaging.transport` is `kafka`, the worker MUST exit at startup with a clear error that the event-connector REST contract is pending. It MUST NOT fall back to Service Bus.
+When `messaging.transport` is `kafka`, the application MUST receive connector-pushed requests rather than poll or pull from the connector. It MUST process requests synchronously and use the acknowledgement behavior defined by the `github-events-http-ingress` capability. It MUST consume internal follow-ups from the Storage queue and MUST NOT open or fall back to Service Bus.
+
+The endpoint MUST require no application-level authentication. Operators MUST provide a customer-managed private route from the event connector and MUST NOT expose the endpoint publicly.
 
 ADO audit events MUST NOT use this path. They remain on the Service Bus path described by the existing requirements.
 
-#### Scenario: Kafka transport selected before the connector exists
-- **WHEN** the worker starts with `messaging.transport: kafka`
-- **THEN** it exits with a non-zero status and a clear error that the event-connector REST API is not implemented
+#### Scenario: Kafka transport receives an existing GitHub shape
+- **WHEN** the event connector posts an already-supported parsed repository event or raw webhook body to `/github-events`
+- **THEN** the worker processes that JSON body without requiring a copy on Service Bus
 
 #### Scenario: Follow-up is not written to Kafka
 - **WHEN** a GitHub event has been handled and an `import_poll` follow-up is required on the `kafka` transport
-- **THEN** the follow-up is scheduled on the storage queue in the sync-state storage account and is not published to Kafka
+- **THEN** the follow-up is scheduled on the Storage queue in the sync-state storage account and is not published to Kafka
+
+#### Scenario: Kafka transport does not pull or fall back
+- **WHEN** the worker starts with `messaging.transport: kafka`
+- **THEN** it starts connector-pushed HTTP ingress and Storage queue follow-up consumption without opening a connector polling client or Service Bus client
+
+#### Scenario: ADO is rejected from connector ingress
+- **WHEN** an ADO Event Grid or audit payload is posted to `/github-events`
+- **THEN** the request returns non-2xx and no ADO lifecycle processing occurs
 

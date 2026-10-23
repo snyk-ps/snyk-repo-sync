@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 
 from ado.client import AdoClient
 from config.ignored_repos import IgnoreMatch, is_ignored
@@ -72,6 +73,27 @@ class WorkerSyncDependencies:
     scope_mapping: ScopeMappingSettings
     snyk_settings: SnykSettings
     ignore_policy_state: IgnorePolicyState | None = None
+    repository_locks: tuple = field(
+        default_factory=lambda: tuple(threading.RLock() for _ in range(64)),
+        repr=False,
+        compare=False,
+    )
+    pending_import_lock: threading.RLock = field(
+        default_factory=threading.RLock,
+        repr=False,
+        compare=False,
+    )
+
+
+def _repository_lock(
+    deps: WorkerSyncDependencies,
+    *,
+    source: str,
+    scope_id: str,
+    repository_id: str,
+):
+    key = (source, scope_id, repository_id)
+    return deps.repository_locks[hash(key) % len(deps.repository_locks)]
 
 
 def process_normalized_event(
@@ -80,7 +102,22 @@ def process_normalized_event(
     *,
     deps: WorkerSyncDependencies,
 ) -> LifecycleOutcome:
-    """Execute lifecycle sync for a normalized ADO event."""
+    """Execute lifecycle sync while serializing work for the same repository."""
+    with _repository_lock(
+        deps,
+        source=event.source,
+        scope_id=event.scope_id,
+        repository_id=event.repository_id,
+    ):
+        return _process_normalized_event(event, resolution, deps=deps)
+
+
+def _process_normalized_event(
+    event: NormalizedEvent,
+    resolution: ResolvedScopeMapping | UnmappedScope,
+    *,
+    deps: WorkerSyncDependencies,
+) -> LifecycleOutcome:
     if isinstance(resolution, UnmappedScope):
         logger.warning(
             "Unmapped scope source=%s lookup_key=%s event_id=%s scope_id=%s",
@@ -111,6 +148,18 @@ def process_normalized_event(
         repository_id=event.repository_id,
     )
     if is_duplicate_event(state, event.event_id):
+        if has_pending_import(state):
+            logger.info(
+                "Duplicate lifecycle event has pending import; rescheduling poll "
+                "event_id=%s repository_id=%s",
+                event.event_id,
+                event.repository_id,
+            )
+            followup = _schedule_import_poll(event, state, retry_count=0)
+            return LifecycleOutcome(
+                scheduled_followups=(followup,),
+                skip_reason="duplicate_event_pending_import",
+            )
         logger.info(
             "Duplicate lifecycle event skipped event_id=%s repository_id=%s",
             event.event_id,
@@ -144,48 +193,55 @@ def process_normalized_event(
         followup = _schedule_import_poll(event, state, retry_count=0)
         return LifecycleOutcome(scheduled_followups=(followup,))
 
-    if deps.sync_state.count_pending_imports() >= deps.snyk_settings.max_concurrent_pending_imports:
-        logger.warning(
-            "Pending import limit reached source=%s scope_id=%s repository_id=%s "
-            "limit=%s event_type=%s outcome=pending_import_limit_reached",
-            event.source,
-            event.scope_id,
-            event.repository_id,
-            deps.snyk_settings.max_concurrent_pending_imports,
-            event.event_type,
-        )
-        body = build_lifecycle_deferred_message(
-            source=event.source,
-            scope_id=event.scope_id,
-            repository_id=event.repository_id,
-            source_event_id=event.event_id,
-            event_type=event.event_type,
-            repository_name=event.repository.name,
-            ado_project_name=scope_lookup_key(event),
-            default_branch=default_branch_for_event(event),
-            payload=dict(event.payload),
-            retry_count=0,
-        )
-        return LifecycleOutcome(
-            scheduled_followups=(
-                ScheduledFollowUp(body=body, delay_seconds=compute_backoff_seconds(0)),
-            ),
-        )
+    with deps.pending_import_lock:
+        if (
+            deps.sync_state.count_pending_imports()
+            >= deps.snyk_settings.max_concurrent_pending_imports
+        ):
+            logger.warning(
+                "Pending import limit reached source=%s scope_id=%s repository_id=%s "
+                "limit=%s event_type=%s outcome=pending_import_limit_reached",
+                event.source,
+                event.scope_id,
+                event.repository_id,
+                deps.snyk_settings.max_concurrent_pending_imports,
+                event.event_type,
+            )
+            body = build_lifecycle_deferred_message(
+                source=event.source,
+                scope_id=event.scope_id,
+                repository_id=event.repository_id,
+                source_event_id=event.event_id,
+                event_type=event.event_type,
+                repository_name=event.repository.name,
+                ado_project_name=scope_lookup_key(event),
+                default_branch=default_branch_for_event(event),
+                payload=dict(event.payload),
+                retry_count=0,
+            )
+            return LifecycleOutcome(
+                scheduled_followups=(
+                    ScheduledFollowUp(
+                        body=body,
+                        delay_seconds=compute_backoff_seconds(0),
+                    ),
+                ),
+            )
 
-    if event.event_type in {"repo.renamed", "repo.default_branch_changed"}:
-        _remove_existing_target_before_reimport(
+        if event.event_type in {"repo.renamed", "repo.default_branch_changed"}:
+            _remove_existing_target_before_reimport(
+                event,
+                state,
+                resolution=resolution,
+                deps=deps,
+            )
+
+        return _start_import(
             event,
-            state,
             resolution=resolution,
+            existing=state,
             deps=deps,
         )
-
-    return _start_import(
-        event,
-        resolution=resolution,
-        existing=state,
-        deps=deps,
-    )
 
 
 def process_import_poll(
@@ -199,7 +255,36 @@ def process_import_poll(
     scope_lookup_key: str,
     deps: WorkerSyncDependencies,
 ) -> LifecycleOutcome:
-    """Poll a pending import job and finalize or reschedule."""
+    """Poll a pending import while serializing work for the same repository."""
+    with _repository_lock(
+        deps,
+        source=source,
+        scope_id=scope_id,
+        repository_id=repository_id,
+    ):
+        return _process_import_poll(
+            source=source,
+            scope_id=scope_id,
+            repository_id=repository_id,
+            source_event_id=source_event_id,
+            import_job_id=import_job_id,
+            retry_count=retry_count,
+            scope_lookup_key=scope_lookup_key,
+            deps=deps,
+        )
+
+
+def _process_import_poll(
+    *,
+    source: str,
+    scope_id: str,
+    repository_id: str,
+    source_event_id: str,
+    import_job_id: str,
+    retry_count: int,
+    scope_lookup_key: str,
+    deps: WorkerSyncDependencies,
+) -> LifecycleOutcome:
     scope_source: ScopeSource = "github" if source == "github" else "ado"
     resolution = resolve_scope_mapping(
         deps.scope_mapping,

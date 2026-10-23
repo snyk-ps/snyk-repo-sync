@@ -1,5 +1,7 @@
 """Tests for ADO lifecycle sync orchestration."""
 
+import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
@@ -118,6 +120,99 @@ def test_repo_created_starts_import_and_schedules_poll() -> None:
     deps.ado.get_repository_default_branch.assert_called_once_with("repo")
     assert len(outcome.scheduled_followups) == 1
     assert outcome.scheduled_followups[0].body["syncPhase"] == "import_poll"
+
+
+def test_duplicate_pending_event_reschedules_missing_import_poll() -> None:
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="",
+        default_branch="main",
+        status="pending",
+        desired_state_hash="hash",
+        last_event_id="evt-1",
+        tag_applied=False,
+        import_job_id="job-1",
+        import_status="pending",
+    )
+    deps = _deps(sync_state=sync_state)
+
+    outcome = process_normalized_event(
+        _created_event(with_default_branch=True),
+        ResolvedScopeMapping(snyk_org_id="org-1", resolution="mapped"),
+        deps=deps,
+    )
+
+    assert outcome.skip_reason == "duplicate_event_pending_import"
+    assert len(outcome.scheduled_followups) == 1
+    assert outcome.scheduled_followups[0].body["importJobId"] == "job-1"
+    deps.snyk.start_import.assert_not_called()
+
+
+def test_concurrent_events_respect_pending_import_limit() -> None:
+    saved_states: list[RepositoryState] = []
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = None
+    sync_state.count_pending_imports.side_effect = lambda: len(saved_states)
+    sync_state.upsert_repository.side_effect = (
+        lambda state, **_kwargs: saved_states.append(state)
+    )
+    snyk = MagicMock()
+
+    def start_import(*_args) -> str:
+        time.sleep(0.02)
+        return "job-1"
+
+    snyk.start_import.side_effect = start_import
+    deps = replace(
+        _deps(sync_state=sync_state, snyk=snyk),
+        snyk_settings=SnykSettings(
+            max_concurrent_pending_imports=1,
+            target_removal=TargetRemovalSettings(
+                on_rename="deactivate",
+                on_default_branch_change="deactivate",
+                on_repo_delete="deactivate",
+                on_ignore="deactivate",
+            ),
+        ),
+    )
+    deps.integration_resolver.resolve.return_value = "integration-1"
+    barrier = threading.Barrier(2)
+    outcomes = []
+
+    def process(event: NormalizedEvent) -> None:
+        barrier.wait()
+        outcomes.append(
+            process_normalized_event(
+                event,
+                ResolvedScopeMapping(snyk_org_id="org-1", resolution="mapped"),
+                deps=deps,
+            )
+        )
+
+    threads = [
+        threading.Thread(
+            target=process,
+            args=(
+                replace(
+                    _created_event(with_default_branch=True),
+                    event_id=f"evt-{index}",
+                    repository_id=f"repo-{index}",
+                ),
+            ),
+        )
+        for index in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    phases = sorted(
+        outcome.scheduled_followups[0].body["syncPhase"] for outcome in outcomes
+    )
+    assert phases == ["import_poll", "lifecycle_deferred"]
+    assert snyk.start_import.call_count == 1
 
 
 def test_github_cloud_app_import_uses_resolved_integration_id() -> None:

@@ -10,6 +10,7 @@ from config.errors import ConfigError
 from config.settings import ServiceBusSettings, StorageQueueSettings
 from tests.conftest import make_worker_settings
 from worker.consumer import WorkerConsumer, _message_body, process_message
+from worker.handler import ProcessingOutcome
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "fixtures"
 SETTINGS = make_worker_settings()
@@ -150,8 +151,13 @@ def test_process_message_dead_letters_invalid_normalization() -> None:
 
 
 @patch(
-    "worker.consumer.handle_queue_message",
-    side_effect=ConfigError("ADO default-branch enrichment requires ADO credentials"),
+    "worker.consumer.process_message_body",
+    return_value=ProcessingOutcome(
+        status="failed",
+        failure_kind="configuration",
+        reason="ConfigurationError",
+        description="ADO default-branch enrichment requires ADO credentials",
+    ),
 )
 def test_process_message_dead_letters_configuration_error(_handle_message) -> None:
     message = FakeMessage(b"{}")
@@ -241,7 +247,7 @@ def test_run_kafka_does_not_construct_service_bus_client() -> None:
         client_factory=factory,
     )
 
-    with pytest.raises(ConfigError, match="REST API contract is pending"):
+    with pytest.raises(ConfigError, match="serviceBus settings are required"):
         consumer.run()
 
     factory.assert_not_called()

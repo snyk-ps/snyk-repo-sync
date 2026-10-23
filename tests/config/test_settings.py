@@ -6,7 +6,15 @@ import pytest
 import yaml
 
 from config.settings import (
+    DEFAULT_HTTP_BIND_HOST,
+    DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES,
+    DEFAULT_HTTP_PORT,
+    DEFAULT_HTTP_PROCESSING_CONCURRENCY,
     DEFAULT_TABLE_NAME,
+    HTTP_BIND_HOST_ENV,
+    HTTP_MAX_REQUEST_BODY_BYTES_ENV,
+    HTTP_PORT_ENV,
+    HTTP_PROCESSING_CONCURRENCY_ENV,
     MESSAGING_TRANSPORT_ENV,
     SERVICEBUS_FQN_ENV,
     SERVICEBUS_QUEUE_ENV,
@@ -355,6 +363,11 @@ def test_load_worker_settings_kafka_derives_queue_url_without_service_bus(tmp_pa
     assert settings.storage_queue.poison_queue_name == "repo-sync-followups-poison"
     assert settings.storage_queue.receive_max_wait_seconds == 5
     assert settings.storage_queue.visibility_timeout_seconds == 60
+    assert settings.http is not None
+    assert settings.http.bind_host == DEFAULT_HTTP_BIND_HOST
+    assert settings.http.port == DEFAULT_HTTP_PORT
+    assert settings.http.max_request_body_bytes == DEFAULT_HTTP_MAX_REQUEST_BODY_BYTES
+    assert settings.http.processing_concurrency == DEFAULT_HTTP_PROCESSING_CONCURRENCY
 
 
 def test_load_worker_settings_kafka_env_overrides(tmp_path: Path) -> None:
@@ -366,6 +379,12 @@ def test_load_worker_settings_kafka_env_overrides(tmp_path: Path) -> None:
                 "poisonQueueName": "file-poison",
                 "receiveMaxWaitSeconds": 15,
                 "visibilityTimeoutSeconds": 30,
+            },
+            http={
+                "bindHost": "127.0.0.1",
+                "port": 8081,
+                "maxRequestBodyBytes": 2048,
+                "processingConcurrency": 2,
             },
         ),
     )
@@ -379,6 +398,10 @@ def test_load_worker_settings_kafka_env_overrides(tmp_path: Path) -> None:
             STORAGE_QUEUE_RECEIVE_MAX_WAIT_SECONDS_ENV: "20",
             STORAGE_QUEUE_VISIBILITY_TIMEOUT_SECONDS_ENV: "90",
             SYNC_STATE_ENDPOINT_ENV: "https://gov.table.core.usgovcloudapi.net",
+            HTTP_BIND_HOST_ENV: "::",
+            HTTP_PORT_ENV: "9090",
+            HTTP_MAX_REQUEST_BODY_BYTES_ENV: "4096",
+            HTTP_PROCESSING_CONCURRENCY_ENV: "4",
         },
     )
 
@@ -388,6 +411,11 @@ def test_load_worker_settings_kafka_env_overrides(tmp_path: Path) -> None:
     assert settings.storage_queue.receive_max_wait_seconds == 20
     assert settings.storage_queue.visibility_timeout_seconds == 90
     assert settings.storage_queue.queue_service_url == "https://gov.queue.core.usgovcloudapi.net"
+    assert settings.http is not None
+    assert settings.http.bind_host == "::"
+    assert settings.http.port == 9090
+    assert settings.http.max_request_body_bytes == 4096
+    assert settings.http.processing_concurrency == 4
 
 
 def test_load_worker_settings_rejects_unknown_transport(tmp_path: Path) -> None:
@@ -436,6 +464,7 @@ def test_load_worker_settings_service_bus_ignores_storage_queue_section(tmp_path
                 "storageAccountEndpoint": "https://example.table.core.windows.net",
             },
             "storageQueue": {"queueName": "NOT-VALID"},
+            "http": "not-a-mapping",
         },
     )
 
@@ -443,3 +472,35 @@ def test_load_worker_settings_service_bus_ignores_storage_queue_section(tmp_path
 
     assert settings.transport == "serviceBus"
     assert settings.storage_queue is None
+    assert settings.http is None
+
+
+@pytest.mark.parametrize(
+    ("http_settings", "match"),
+    [
+        ({"bindHost": ""}, "http.bindHost"),
+        ({"port": 0}, "between 1 and 65535"),
+        ({"port": 65536}, "between 1 and 65535"),
+        ({"port": True}, "http.port"),
+        ({"maxRequestBodyBytes": 0}, "must be a positive integer"),
+        ({"maxRequestBodyBytes": "1.5"}, "maxRequestBodyBytes"),
+        ({"processingConcurrency": 0}, "between 1 and 100"),
+        ({"processingConcurrency": 101}, "between 1 and 100"),
+    ],
+)
+def test_load_worker_settings_kafka_rejects_invalid_http_settings(
+    tmp_path: Path,
+    http_settings: dict[str, object],
+    match: str,
+) -> None:
+    path = _write_config(tmp_path, _kafka_config(http=http_settings))
+
+    with pytest.raises(ConfigError, match=match):
+        load_worker_settings(path, {})
+
+
+def test_load_worker_settings_kafka_requires_http_mapping(tmp_path: Path) -> None:
+    path = _write_config(tmp_path, _kafka_config(http="not-a-mapping"))
+
+    with pytest.raises(ConfigError, match="http must be a mapping"):
+        load_worker_settings(path, {})

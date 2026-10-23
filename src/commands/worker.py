@@ -17,10 +17,13 @@ from snyk.client import SnykClient
 from snyk.integration_resolver import IntegrationResolver
 from sync_state import SyncStateStore
 from worker.consumer import WorkerConsumer
-from worker.event_source import open_github_event_source
+from worker.http_ingress import GitHubEventsApp
+from worker.http_server import UvicornHttpServer
 from worker.ignore_policy import IgnorePolicyState
 from worker.lifecycle import WorkerSyncDependencies
 from worker.reconciliation import IgnoreReconciliationLoop
+from worker.runtime import KafkaRuntime
+from worker.storage_queue import open_storage_queue_transport
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +51,6 @@ def run_worker(args: argparse.Namespace) -> int:
     configure_logging()
     try:
         settings = load_worker_settings(args.config)
-        if settings.transport == "kafka":
-            open_github_event_source()
         snyk_token = require_snyk_token()
         ado_client: AdoClient | None = None
         if settings.ado is not None:
@@ -106,11 +107,42 @@ def run_worker(args: argparse.Namespace) -> int:
         )
         reconciliation_loop.start()
 
-    consumer = WorkerConsumer(settings, sync_state, sync_deps=sync_deps, credential=credential)
     try:
-        consumer.run()
+        if settings.transport == "serviceBus":
+            consumer = WorkerConsumer(
+                settings,
+                sync_state,
+                sync_deps=sync_deps,
+                credential=credential,
+            )
+            consumer.run()
+        else:
+            if settings.storage_queue is None or settings.http is None:
+                raise ConfigError(
+                    "storageQueue and http settings are required for the kafka transport"
+                )
+            followup_transport = open_storage_queue_transport(
+                settings.storage_queue,
+                credential=credential,
+            )
+            app = GitHubEventsApp(
+                settings.http,
+                scope_mapping=settings.scope_mapping,
+                sync_deps=sync_deps,
+                followup_scheduler=followup_transport,
+            )
+            runtime = KafkaRuntime(
+                http_server=UvicornHttpServer(app, settings.http),
+                followup_consumer=followup_transport,
+                settings=settings,
+                sync_deps=sync_deps,
+            )
+            runtime.run()
     except KeyboardInterrupt:
         logger.info("Worker stopped")
+    except (ConfigError, RuntimeError) as exc:
+        logger.error("Worker failed: %s", exc)
+        return 1
     finally:
         if reconciliation_loop is not None:
             reconciliation_loop.stop()

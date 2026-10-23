@@ -2,9 +2,9 @@
 
 # Snyk Repo Sync
 
-Queue-driven worker that consumes repository lifecycle events from Azure Service Bus and syncs Snyk targets for Azure DevOps and GitHub repositories.
+Worker that consumes repository lifecycle events from Azure Service Bus or private GitHub HTTP ingress and syncs Snyk targets for Azure DevOps and GitHub repositories.
 
-External systems (ADO audit stream via Event Grid, GitHub webhooks) publish native JSON to an **existing** Service Bus queue. This application runs as a **worker Container App** that reads from that queue, normalizes ADO lifecycle events, syncs mapped repositories to Snyk via async import jobs, and persists sync state in Azure Table Storage. Project tagging is deferred to a follow-up change.
+Service Bus is the default and recommended transport. It carries ADO audit events, GitHub webhooks, and internal follow-ups on one existing queue. Kafka deployments use an event connector that sends GitHub events to private `POST /github-events` ingress. An Azure Storage Queue carries internal follow-ups on that path. The worker normalizes events, syncs mapped repositories to Snyk through asynchronous import jobs, and persists sync state in Azure Table Storage.
 
 **Operators:** queue and ingress setup (Service Bus, ADO audit stream, GitHub webhooks) are documented in **[INGESTION.md](INGESTION.md)**. ADO audit events are batched and typically arrive within ~30 minutes.
 
@@ -18,7 +18,7 @@ This worker and [Snyk Repo Content Sync](https://docs.snyk.io/scan-fix-and-preve
 | **What it syncs**     | **Repository (target) lifecycle**: whether a repo exists in Snyk and which branch is monitored                 | **Manifest and config files within a repo**: which Snyk Projects exist for that target                                                 |
 | Triggers              | Repo created, renamed, deleted, default branch changed                                                         | Push events: manifest, Docker, or IaC files added, deleted, or renamed                                                                 |
 | **Actions**           | Import repo as a Snyk target; deactivate or delete target on rename/delete; re-import on default-branch change | Auto-create Projects for new scan targets; deactivate Projects when files are removed; replace Projects on path renames                |
-| **How events arrive** | Azure Service Bus (ADO audit stream, GitHub webhooks) → this worker                                            | Snyk webhooks on repos already imported in Snyk                                                                                        |
+| **How events arrive** | Azure Service Bus, or Kafka through private event-connector HTTP ingress → this worker                        | Snyk webhooks on repos already imported in Snyk                                                                                        |
 | **Operator setup**    | Self-hosted worker, scope mapping, Azure infra; see [Deployment](#deployment) and [INGESTION.md](INGESTION.md) | Enable in Snyk (Enterprise, Early Access via [Snyk Preview](https://docs.snyk.io/platform-administration/snyk-hierarchy/snyk-preview)) |
 
 
@@ -59,9 +59,9 @@ Deploy the worker as a **Container App** (long-running `worker run` consumer) �
 | **Process model** | Long-running `worker run` receive loop (image default `worker run --config /config/config.yaml`)                                                         |
 | **CPU / memory**  | Start around **0.5 vCPU** and **1 GiB**; increase if processing is slow or OOM                                                                           |
 | **Replicas**      | **Min replicas: 1** for first production deploy (always consuming). Multiple replicas may run independently on the same queue                            |
-| **Networking**    | Outbound **HTTPS** to Snyk API and your Table Storage endpoint; also `dev.azure.com` (or `ado.host`) when `azure-repos` mappings are configured           |
+| **Networking**    | Outbound **HTTPS** to Snyk API and Azure Storage. Kafka mode also requires private inbound connector access to `POST /github-events`; do not expose it publicly |
 | **Secrets**       | `SNYK_TOKEN`, plus `ADO_PAT` when `scopeMapping.azure-repos` is non-empty, via Key Vault references / Container Apps secrets                             |
-| **Identity**      | Managed identity with **Azure Service Bus Data Owner** and **Storage Table Data Contributor** — see **[CONFIGURATION.md § RBAC](CONFIGURATION.md#rbac)** |
+| **Identity**      | Service Bus: **Azure Service Bus Data Owner** and **Storage Table Data Contributor**. Kafka: **Storage Queue Data Contributor** and **Storage Table Data Contributor** |
 | **Config**        | Non-secret operator YAML mounted at `/config/config.yaml` (Azure Files)                                                                                  |
 | **Image**         | `ghcr.io/snyk-ps/snyk-repo-sync:<version>` — pin a release tag or digest                                                                                 |
 
@@ -172,7 +172,9 @@ If the **create** wizard does not offer volumes, finish **Create**, then open th
 3. On the **Table** storage account: **Access Control (IAM)** → **Add role assignment** → **Storage Table Data Contributor** → assign to the app's identity.
 4. Ensure `serviceBus`, `syncState`, and `ado` settings in mounted `config.yaml` match your Azure resources — see **[CONFIGURATION.md](CONFIGURATION.md)**.
 
-The default transport is Service Bus. The Kafka transport (`messaging.transport: kafka`) is not runnable until the event-connector REST contract exists; the worker exits at startup if it is selected. When that path is used later, skip the Service Bus role and instead assign **Storage Queue Data Contributor** on the same storage account as the table. The follow-up queue and its poison queue must already exist in that account. Keep **min replicas = 1** for that path.
+The default and recommended transport is Service Bus. For `messaging.transport: kafka`, skip the Service Bus role and assign **Storage Queue Data Contributor** on the same storage account as the table. The follow-up queue and poison queue must already exist.
+
+Kafka mode starts private `POST /github-events` ingress and the Storage Queue follow-up consumer. The endpoint has no application authentication. Do not configure public ingress. Provide a customer-managed private route from the event connector, terminate TLS at the deployment boundary, and restrict network access to the connector. Keep minimum replicas at one.
 
 The worker uses `DefaultAzureCredential`; connection strings are **not** supported.
 
@@ -246,6 +248,10 @@ The worker loads `data/config.yaml` by default (or `/config/config.yaml` in prod
 | Service Bus namespace  | `serviceBus.fullyQualifiedNamespace` | `SERVICEBUS_FULLY_QUALIFIED_NAMESPACE` |
 | Service Bus queue      | `serviceBus.queueName`               | `SERVICEBUS_QUEUE_NAME`                |
 | Receive poll interval  | `serviceBus.receiveMaxWaitSeconds`   | `SERVICEBUS_RECEIVE_MAX_WAIT_SECONDS`  |
+| HTTP bind host         | `http.bindHost`                      | `HTTP_BIND_HOST`                       |
+| HTTP port              | `http.port`                          | `HTTP_PORT`                            |
+| HTTP body limit        | `http.maxRequestBodyBytes`           | `HTTP_MAX_REQUEST_BODY_BYTES`          |
+| HTTP concurrency       | `http.processingConcurrency`         | `HTTP_PROCESSING_CONCURRENCY`          |
 | Table Storage endpoint | `syncState.storageAccountEndpoint`   | `SYNC_STATE_STORAGE_ACCOUNT_ENDPOINT`  |
 | Table name             | `syncState.tableName`                | `SYNC_STATE_TABLE_NAME`                |
 | Scope mapping          | `scopeMapping`                       | — (config file only)                   |
@@ -275,14 +281,16 @@ uv run python src/main.py worker run --config data/config.yaml
 
 ## Features
 
-- Consumes native queue messages from a pre-provisioned Service Bus queue (Event Grid JSON for ADO; raw webhook JSON for GitHub)
+- Consumes native messages from Service Bus or Kafka-mode private `POST /github-events` ingress
 - Authenticates with `DefaultAzureCredential` and Azure RBAC (no connection strings)
-- Parses provider-native message shapes and normalizes ADO audit lifecycle events into a provider-neutral model
+- Processes Kafka HTTP requests synchronously and returns 204 only after durable follow-up scheduling succeeds
+- Uses an Azure Storage Queue for Kafka-mode `import_poll` and `lifecycle_deferred` follow-ups
+- Parses provider-native message shapes and normalizes lifecycle events into a provider-neutral model
 - Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `snykIntegrationId`, optional `defaultSnykOrgId`)
 - Syncs mapped ADO repos to Snyk: import with async job polling, configurable target removal (`deactivate` or `delete`), sync-state tracking
-- Schedules internal follow-up messages on the same queue for import polling and concurrency backpressure
+- Schedules internal follow-up messages on the active follow-up queue for import polling and concurrency backpressure
 - Requires `SNYK_TOKEN` in the environment; project tagging deferred
-- Passes GitHub messages through without normalization (GitHub mapper deferred)
+- Accepts existing GitHub `renamed`, `edited`, and `deleted` shapes on Kafka ingress. `created`, ADO, `updated`, and revised connector shapes return non-2xx
 
 
 

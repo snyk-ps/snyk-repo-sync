@@ -6,18 +6,17 @@
 # access to ado.organization and every mapped project.
 
 # Required only when scopeMapping.azure-repos is non-empty.
-ado:
-  organization: contoso
+# ado:
+#   organization: contoso
   # host: dev.azure.com
 
-# messaging.transport defaults to serviceBus. kafka exits at startup until the
-# event-connector REST API exists. See CONFIGURATION.md.
+# messaging.transport defaults to serviceBus, which remains recommended.
 # messaging:
 #   transport: serviceBus
 
-serviceBus:
-  fullyQualifiedNamespace: mynamespace.servicebus.windows.net
-  queueName: repo-sync-events
+# serviceBus:
+#   fullyQualifiedNamespace: mynamespace.servicebus.windows.net
+#   queueName: repo-sync-events
   # receiveMaxWaitSeconds: 5   # optional; max seconds per receive poll (does not stop the worker)
 
 syncState:
@@ -29,10 +28,18 @@ syncState:
 # storageQueue:
 #   queueName: repo-sync-followups
 #   # poisonQueueName: repo-sync-followups-poison
+#
+# The event connector sends GitHub JSON to private POST /github-events.
+# Do not expose this unauthenticated endpoint publicly.
+http:
+  bindHost: 0.0.0.0
+  port: 8080
+  maxRequestBodyBytes: 1048576
+  processingConcurrency: 1
 
 # Optional: map ADO project names and GitHub org logins to Snyk organization ids.
-# scopeMapping:
-#   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"
+scopeMapping:
+  defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"
 #   azure-repos:
 #     - projectName: Contoso-Platform
 #       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -44,15 +51,15 @@ syncState:
 
 # Optional: ignore policy file (YAML or JSON, UTF-8).
 # Relative paths resolve from the directory containing this config file.
-# ignoredRepos:
-#   path: ignored-repos.yaml
-#   reconciliationIntervalMinutes: 15
+ignoredRepos:
+  path: ignored-repos.yaml
+  reconciliationIntervalMinutes: 15
 
 # Optional: Snyk lifecycle sync behaviour (defaults shown).
-# snyk:
-#   maxConcurrentPendingImports: 100
-#   targetRemoval:
-#     onRename: deactivate              # deactivate | delete
-#     onDefaultBranchChange: deactivate
-#     onRepoDelete: deactivate
-#     onIgnore: deactivate
+snyk:
+  maxConcurrentPendingImports: 100
+  targetRemoval:
+    onRename: deactivate              # deactivate | delete
+    onDefaultBranchChange: deactivate
+    onRepoDelete: deactivate
+    onIgnore: deactivate
