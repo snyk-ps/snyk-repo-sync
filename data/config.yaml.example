@@ -37,17 +37,29 @@ http:
   maxRequestBodyBytes: 1048576
   processingConcurrency: 1
 
-# Optional: map ADO project names and GitHub org logins to Snyk organization ids.
+# Optional: map ADO project names, GitHub org logins, or extracted property
+# values to Snyk organization ids. A missing match uses defaultSnykOrgId and
+# logs a warning. With no default, the worker logs a warning and skips Snyk.
 scopeMapping:
   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"
 #   azure-repos:
 #     - projectName: Contoso-Platform
 #       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 #       # snykIntegrationId: "bbbbbbbb-..."       # optional
+#   propertyExtractors:
+#     github:
+#       collectionPath: data.newPropertyValues
+#       matchField: property_name
+#       matchValue: azure-devops-project
+#       valueField: value
 #   github-cloud-app:
 #     - orgName: contoso
 #       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
+#     - propertyValue: sample-project
+#       snykOrgId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 #   # Other supported GitHub keys: github, github-server-app, github-enterprise.
+#   # azure-repos accepts projectName or propertyValue rows. propertyValue requires
+#   # propertyExtractors.azure-repos. A GitHub import does not deactivate an ADO target.
 
 # Optional: ignore policy file (YAML or JSON, UTF-8).
 # Relative paths resolve from the directory containing this config file.

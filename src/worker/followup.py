@@ -42,6 +42,7 @@ class InternalFollowUpMessage:
     ado_project_name: str | None = None
     default_branch: str | None = None
     payload: dict[str, str] | None = None
+    extracted_property_value: str | None = None
 
 
 def compute_backoff_seconds(
@@ -64,9 +65,10 @@ def build_import_poll_message(
     import_status: ImportStatusValue,
     retry_count: int,
     ado_project_name: str,
+    extracted_property_value: str | None = None,
 ) -> dict[str, Any]:
     """Build an ``import_poll`` follow-up envelope."""
-    return {
+    body: dict[str, Any] = {
         "syncPhase": IMPORT_POLL_PHASE,
         "source": source,
         "scopeId": scope_id,
@@ -78,6 +80,9 @@ def build_import_poll_message(
         "adoProjectName": ado_project_name,
         "occurredAt": datetime.now(tz=UTC).isoformat(),
     }
+    if extracted_property_value:
+        body["extractedPropertyValue"] = extracted_property_value
+    return body
 
 
 def build_lifecycle_deferred_message(
@@ -92,12 +97,14 @@ def build_lifecycle_deferred_message(
     default_branch: str,
     payload: dict[str, str],
     retry_count: int,
+    extracted_property_value: str | None = None,
 ) -> dict[str, Any]:
     """Build a ``lifecycle_deferred`` follow-up envelope.
 
-    ``adoProjectName`` holds the scope lookup key (ADO project or GitHub org login).
+    ``adoProjectName`` holds the provider owner (ADO project or GitHub org login).
+    ``extractedPropertyValue`` is the scope-mapping property value when one was read.
     """
-    return {
+    body: dict[str, Any] = {
         "syncPhase": LIFECYCLE_DEFERRED_PHASE,
         "source": source,
         "scopeId": scope_id,
@@ -111,6 +118,9 @@ def build_lifecycle_deferred_message(
         "retryCount": retry_count,
         "occurredAt": datetime.now(tz=UTC).isoformat(),
     }
+    if extracted_property_value:
+        body["extractedPropertyValue"] = extracted_property_value
+    return body
 
 
 def parse_internal_follow_up(data: dict[str, Any]) -> InternalFollowUpMessage:
@@ -142,6 +152,11 @@ def parse_internal_follow_up(data: dict[str, Any]) -> InternalFollowUpMessage:
     ):
         raise ValueError("adoProjectName must be a non-empty string when present")
     default_branch = data.get("defaultBranch")
+    extracted_property_value = data.get("extractedPropertyValue")
+    if extracted_property_value is not None and (
+        not isinstance(extracted_property_value, str) or not extracted_property_value.strip()
+    ):
+        raise ValueError("extractedPropertyValue must be a non-empty string when present")
     payload_raw = data.get("payload")
     payload: dict[str, str] | None = None
     if payload_raw is not None:
@@ -163,6 +178,11 @@ def parse_internal_follow_up(data: dict[str, Any]) -> InternalFollowUpMessage:
         ado_project_name=ado_project_name.strip() if isinstance(ado_project_name, str) else None,
         default_branch=default_branch.strip() if isinstance(default_branch, str) else None,
         payload=payload,
+        extracted_property_value=(
+            extracted_property_value.strip()
+            if isinstance(extracted_property_value, str)
+            else None
+        ),
     )
 
 

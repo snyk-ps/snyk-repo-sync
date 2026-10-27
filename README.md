@@ -286,11 +286,11 @@ uv run python src/main.py worker run --config data/config.yaml
 - Processes Kafka HTTP requests synchronously and returns 204 only after durable follow-up scheduling succeeds
 - Uses an Azure Storage Queue for Kafka-mode `import_poll` and `lifecycle_deferred` follow-ups
 - Parses provider-native message shapes and normalizes lifecycle events into a provider-neutral model
-- Resolves ADO project name → Snyk org id from operator `scopeMapping` config (optional `snykIntegrationId`, optional `defaultSnykOrgId`)
+- Resolves ADO project name, GitHub org login, or a configured message property value to a Snyk org id (`scopeMapping`, optional `snykIntegrationId`, optional `defaultSnykOrgId`)
 - Syncs mapped ADO repos to Snyk: import with async job polling, configurable target removal (`deactivate` or `delete`), sync-state tracking
 - Schedules internal follow-up messages on the active follow-up queue for import polling and concurrency backpressure
 - Requires `SNYK_TOKEN` in the environment; project tagging deferred
-- Accepts existing GitHub `renamed`, `edited`, and `deleted` shapes on Kafka ingress. `created`, ADO, `updated`, and revised connector shapes return non-2xx
+- Accepts GitHub `renamed`, `edited`, `deleted`, and `ENVLOG.GitHub.custom_property_values.updated` on Kafka ingress. The updated envelope is the GitHub import. `created` and ADO payloads return non-2xx
 
 
 
@@ -320,7 +320,7 @@ Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)**
 | Integration tests skipped                          | Config file missing or invalid                                                                                                       |
 | Messages dead-lettered with `InvalidMessage`       | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON                                                         |
 | Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId`                                                                   |
-| Log warnings for unmapped ADO project              | Add a `scopeMapping.azure-repos` entry for the project name or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+| Log warnings `scope_mapping_unmapped` or `scope_mapping_default` | Add a `projectName`, `orgName`, or `propertyValue` entry, or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 
 
 

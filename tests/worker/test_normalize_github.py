@@ -61,6 +61,58 @@ def test_parse_queue_message_sets_event_id_from_delivery_id() -> None:
     assert message.event_id == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
 
+def test_parsed_updated_normalizes_to_repo_created() -> None:
+    event = normalize_github_queue_payload(_load("github_parsed_updated.json"))
+
+    assert event.source == "github"
+    assert event.event_type == "repo.created"
+    assert event.event_id == "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+    assert event.scope_id == "sample-org"
+    assert event.github is not None
+    assert event.github.org_login == "sample-org"
+    assert event.ado is None
+    assert event.repository.name == "sample-repo"
+    assert event.payload["defaultBranch"] == "main"
+    assert event.occurred_at.year == 2026
+    assert event.occurred_at.month == 10
+    assert event.occurred_at.day == 1
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "source", "event_type"),
+    [
+        ("github_webhook_created.json", "github", "repo.created"),
+        ("github_parsed_renamed.json", "github", "repo.renamed"),
+        ("github_parsed_deleted.json", "github", "repo.deleted"),
+        ("github_parsed_edited_branch.json", "github", "repo.default_branch_changed"),
+        ("eventgrid_ado_created.json", "ado", "repo.created"),
+        ("eventgrid_ado_renamed.json", "ado", "repo.renamed"),
+        ("eventgrid_ado_deleted.json", "ado", "repo.deleted"),
+        ("eventgrid_ado_default_branch_changed.json", "ado", "repo.default_branch_changed"),
+    ],
+)
+def test_existing_fixture_shapes_keep_normalized_outcomes(
+    fixture_name: str,
+    source: str,
+    event_type: str,
+) -> None:
+    from worker.normalize import normalize_ado_audit_record
+
+    message = parse_queue_message((FIXTURES / fixture_name).read_text(encoding="utf-8"))
+
+    assert message.source == source
+    if source == "github":
+        event = normalize_github_queue_payload(
+            message.provider_payload,
+            delivery_id=message.event_id,
+        )
+    else:
+        event = normalize_ado_audit_record(message.provider_payload)
+
+    assert event.source == source
+    assert event.event_type == event_type
+
+
 def test_missing_owner_raises_normalization_error() -> None:
     payload = {
         "action": "created",

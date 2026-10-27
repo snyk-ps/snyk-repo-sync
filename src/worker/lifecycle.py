@@ -119,12 +119,20 @@ def _process_normalized_event(
     deps: WorkerSyncDependencies,
 ) -> LifecycleOutcome:
     if isinstance(resolution, UnmappedScope):
+        extracted = (
+            f" extracted_value={event.scope_property_value}"
+            if event.scope_property_value
+            else ""
+        )
         logger.warning(
-            "Unmapped scope source=%s lookup_key=%s event_id=%s scope_id=%s",
+            "scope_mapping_unmapped source=%s lookup_key=%s event_id=%s "
+            "scope_id=%s repository_id=%s%s",
             resolution.source,
             resolution.lookup_key,
             event.event_id,
             event.scope_id,
+            event.repository_id,
+            extracted,
         )
         return LifecycleOutcome(skip_reason="unmapped_scope")
 
@@ -218,6 +226,7 @@ def _process_normalized_event(
                 default_branch=default_branch_for_event(event),
                 payload=dict(event.payload),
                 retry_count=0,
+                extracted_property_value=event.scope_property_value,
             )
             return LifecycleOutcome(
                 scheduled_followups=(
@@ -254,6 +263,7 @@ def process_import_poll(
     retry_count: int,
     scope_lookup_key: str,
     deps: WorkerSyncDependencies,
+    extracted_property_value: str | None = None,
 ) -> LifecycleOutcome:
     """Poll a pending import while serializing work for the same repository."""
     with _repository_lock(
@@ -271,6 +281,7 @@ def process_import_poll(
             retry_count=retry_count,
             scope_lookup_key=scope_lookup_key,
             deps=deps,
+            extracted_property_value=extracted_property_value,
         )
 
 
@@ -284,12 +295,14 @@ def _process_import_poll(
     retry_count: int,
     scope_lookup_key: str,
     deps: WorkerSyncDependencies,
+    extracted_property_value: str | None = None,
 ) -> LifecycleOutcome:
     scope_source: ScopeSource = "github" if source == "github" else "ado"
     resolution = resolve_scope_mapping(
         deps.scope_mapping,
         source=scope_source,
         lookup_key=scope_lookup_key,
+        extracted_value=extracted_property_value,
     )
     if isinstance(resolution, UnmappedScope):
         return LifecycleOutcome(
@@ -302,6 +315,7 @@ def _process_import_poll(
         lookup_key=scope_lookup_key,
         org_id=resolution.snyk_org_id,
         deps=deps,
+        extracted_value=extracted_property_value,
     )
     snyk_org_id = resolution.snyk_org_id
     if retry_count >= MAX_IMPORT_POLL_RETRIES:
@@ -356,6 +370,7 @@ def _process_import_poll(
                 import_status="pending",
                 retry_count=retry_count + 1,
                 ado_project_name=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
             ),
             delay_seconds=compute_backoff_seconds(retry_count + 1),
         )
@@ -381,6 +396,7 @@ def _process_import_poll(
                 import_status="pending",
                 retry_count=retry_count + 1,
                 ado_project_name=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
             ),
             delay_seconds=compute_backoff_seconds(retry_count + 1),
         )
@@ -420,6 +436,7 @@ def _process_import_poll(
                 import_status="failed",
                 retry_count=retry_count + 1,
                 ado_project_name=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
             ),
             delay_seconds=compute_backoff_seconds(retry_count + 1),
         )
@@ -437,7 +454,12 @@ def _process_import_poll(
             dead_letter_description="Repository state missing for import poll follow-up",
         )
 
-    source_type = _snyk_source_type(scope_source, scope_lookup_key, deps)
+    source_type = _snyk_source_type(
+        scope_source,
+        scope_lookup_key,
+        deps,
+        extracted_value=extracted_property_value,
+    )
     lookup = TargetLookup(
         owner=scope_lookup_key,
         repo_name=existing.repo_name,
@@ -470,6 +492,7 @@ def _process_import_poll(
                 import_status="pending",
                 retry_count=retry_count + 1,
                 ado_project_name=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
             ),
             delay_seconds=compute_backoff_seconds(retry_count + 1),
         )
@@ -516,6 +539,7 @@ def process_lifecycle_deferred(
         deps.scope_mapping,
         source=event.source,
         lookup_key=scope_lookup_key(event),
+        extracted_value=event.scope_property_value,
     )
     if isinstance(resolution, UnmappedScope):
         return LifecycleOutcome(skip_reason="unmapped_scope")
@@ -560,7 +584,12 @@ def _handle_ignored_event(
 
     lookup = target_lookup_for_event(event, state)
     stored_id = state.snyk_target_id if state else ""
-    source_type = _snyk_source_type(event.source, scope_lookup_key(event), deps)
+    source_type = _snyk_source_type(
+        event.source,
+        scope_lookup_key(event),
+        deps,
+        extracted_value=event.scope_property_value,
+    )
     target_id = ensure_snyk_target_id(
         resolution.snyk_org_id,
         stored_id=stored_id,
@@ -633,7 +662,12 @@ def _handle_repo_deleted(
     mode = deps.snyk_settings.target_removal.on_repo_delete
     lookup = target_lookup_for_event(event, state)
     stored_id = state.snyk_target_id if state else ""
-    source_type = _snyk_source_type(event.source, scope_lookup_key(event), deps)
+    source_type = _snyk_source_type(
+        event.source,
+        scope_lookup_key(event),
+        deps,
+        extracted_value=event.scope_property_value,
+    )
     target_id = ensure_snyk_target_id(
         resolution.snyk_org_id,
         stored_id=stored_id,
@@ -742,6 +776,7 @@ def _start_import(
                 deps.scope_mapping,
                 source=event.source,
                 lookup_key=lookup_key,
+                extracted_value=event.scope_property_value,
             )
             and exc.status_code in {400, 404}
         ):
@@ -751,6 +786,7 @@ def _start_import(
                     deps.scope_mapping,
                     source=event.source,
                     lookup_key=lookup_key,
+                    extracted_value=event.scope_property_value,
                 ).integration_type,
             )
             job_id = deps.snyk.start_import(resolution.snyk_org_id, integration_id, target)
@@ -815,7 +851,12 @@ def _remove_existing_target_before_reimport(
         return
     lookup = target_lookup_for_event(event, state)
     stored_id = state.snyk_target_id if state else ""
-    source_type = _snyk_source_type(event.source, scope_lookup_key(event), deps)
+    source_type = _snyk_source_type(
+        event.source,
+        scope_lookup_key(event),
+        deps,
+        extracted_value=event.scope_property_value,
+    )
     target_id = ensure_snyk_target_id(
         resolution.snyk_org_id,
         stored_id=stored_id,
@@ -884,6 +925,7 @@ def _resolve_integration_id(
         lookup_key=scope_lookup_key(event),
         org_id=resolution.snyk_org_id,
         deps=deps,
+        extracted_value=event.scope_property_value,
     )
 
 
@@ -893,11 +935,13 @@ def _resolve_integration_id_for_scope(
     lookup_key: str,
     org_id: str,
     deps: WorkerSyncDependencies,
+    extracted_value: str | None = None,
 ) -> str:
     integration_settings = resolve_integration_settings(
         deps.scope_mapping,
         source=source,
         lookup_key=lookup_key,
+        extracted_value=extracted_value,
     )
     return deps.integration_resolver.resolve(
         org_id=org_id,
@@ -910,12 +954,15 @@ def _snyk_source_type(
     source: ScopeSource,
     lookup_key: str,
     deps: WorkerSyncDependencies,
+    *,
+    extracted_value: str | None = None,
 ) -> str:
     """Return Snyk REST ``source_types`` filter for target lookup."""
     return resolve_integration_settings(
         deps.scope_mapping,
         source=source,
         lookup_key=lookup_key,
+        extracted_value=extracted_value,
     ).integration_type
 
 
@@ -934,6 +981,7 @@ def _schedule_import_poll(
         import_status="pending",
         retry_count=retry_count,
         ado_project_name=scope_lookup_key(event),
+        extracted_property_value=event.scope_property_value,
     )
     return ScheduledFollowUp(body=body, delay_seconds=compute_backoff_seconds(retry_count))
 
@@ -1000,6 +1048,8 @@ def _event_from_deferred_message(message: dict[str, str | dict[str, str] | int])
     source = str(message.get("source", "ado"))
     scope_id = str(message["scopeId"])
     lookup_name = str(message["adoProjectName"])
+    extracted_raw = message.get("extractedPropertyValue")
+    extracted_value = extracted_raw.strip() if isinstance(extracted_raw, str) else None
     if source == "github":
         return NormalizedEvent(
             source="github",
@@ -1011,6 +1061,7 @@ def _event_from_deferred_message(message: dict[str, str | dict[str, str] | int])
             repository=RepositoryRef(name=str(message["repositoryName"])),
             github=GitHubScope(org_login=lookup_name),
             payload={str(key): str(value) for key, value in payload.items()},
+            scope_property_value=extracted_value or None,
         )
     return NormalizedEvent(
         source="ado",
@@ -1027,4 +1078,5 @@ def _event_from_deferred_message(message: dict[str, str | dict[str, str] | int])
             project_name=lookup_name,
         ),
         payload={str(key): str(value) for key, value in payload.items()},
+        scope_property_value=extracted_value or None,
     )
