@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from worker.followup import InternalFollowUpMessage, parse_internal_follow_up
+from worker.normalize import GITHUB_UPDATED_TYPE
 
 ADO_AUDIT_EVENT_TYPE = "AzureDevOpsAuditEvent"
 ADO_AUDIT_SUBJECT = "AzureDevOps/Auditing"
@@ -23,6 +24,7 @@ class QueueMessage:
     source: Literal["ado", "github"]
     provider_payload: dict[str, Any]
     event_id: str | None = None
+    raw_body: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -42,7 +44,13 @@ def _is_ado_message(data: dict[str, Any]) -> bool:
     return False
 
 
+def _is_github_updated_message(data: dict[str, Any]) -> bool:
+    return data.get("type") == GITHUB_UPDATED_TYPE and isinstance(data.get("data"), dict)
+
+
 def _is_github_message(data: dict[str, Any]) -> bool:
+    if _is_github_updated_message(data):
+        return True
     repository = data.get("repository")
     action = data.get("action")
     return isinstance(repository, dict) and isinstance(action, str) and bool(action.strip())
@@ -95,6 +103,18 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
             source="ado",
             provider_payload=audit_record,
             event_id=event_id.strip() if isinstance(event_id, str) and event_id.strip() else None,
+            raw_body=data,
+        )
+
+    if _is_github_updated_message(data):
+        inner = data["data"]
+        delivery_id = inner.get("deliveryId") if isinstance(inner, dict) else None
+        event_id = delivery_id.strip() if isinstance(delivery_id, str) and delivery_id.strip() else None
+        return QueueMessage(
+            source="github",
+            provider_payload=data,
+            event_id=event_id,
+            raw_body=data,
         )
 
     if _is_github_message(data):
@@ -106,6 +126,7 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
             source="github",
             provider_payload=data,
             event_id=event_id,
+            raw_body=data,
         )
 
     raise MessageParseError("unrecognized queue message shape")

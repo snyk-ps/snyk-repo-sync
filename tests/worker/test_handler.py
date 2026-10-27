@@ -1,6 +1,7 @@
 """Tests for queue message handling."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -123,7 +124,7 @@ def test_handle_ado_created_logs_unmapped_scope(caplog) -> None:
         result = handle_queue_message(_ado_created_body("missing-project"))
 
     assert isinstance(result.scope_resolution, UnmappedScope)
-    assert "Unmapped scope" in caplog.text
+    assert "scope_mapping_unmapped" in caplog.text
 
 
 def test_handle_github_message_normalizes_and_resolves_unmapped_scope() -> None:
@@ -272,3 +273,119 @@ def test_process_message_body_preserves_dead_letter_reason(_handle) -> None:
     assert outcome.failure_kind == "processing"
     assert outcome.reason == "ImportJobFailed"
     assert outcome.description == "retries exhausted"
+
+
+def _updated_body() -> bytes:
+    fixture = Path(__file__).resolve().parents[2] / "data" / "fixtures" / "github_parsed_updated.json"
+    return fixture.read_bytes()
+
+
+def _property_mapping(*, default: str | None, include_property: bool) -> ScopeMappingSettings:
+    from config.scope_mapping import parse_scope_mapping
+
+    github_rows: list[dict[str, str]] = [
+        {"orgName": "sample-org", "snykOrgId": "org-by-name"},
+    ]
+    if include_property:
+        github_rows.append(
+            {"propertyValue": "sample-project", "snykOrgId": "org-by-property"},
+        )
+    raw: dict[str, object] = {
+        "propertyExtractors": {
+            "github": {
+                "collectionPath": "data.newPropertyValues",
+                "matchField": "property_name",
+                "matchValue": "azure-devops-project",
+                "valueField": "value",
+            },
+        },
+        "github-cloud-app": github_rows,
+    }
+    if default is not None:
+        raw["defaultSnykOrgId"] = default
+    return parse_scope_mapping(raw)
+
+
+def _deps_for(mapping: ScopeMappingSettings) -> WorkerSyncDependencies:
+    deps = _sync_deps()
+    return WorkerSyncDependencies(
+        sync_state=deps.sync_state,
+        snyk=deps.snyk,
+        ado=deps.ado,
+        integration_resolver=deps.integration_resolver,
+        scope_mapping=mapping,
+        snyk_settings=deps.snyk_settings,
+    )
+
+
+def test_updated_event_imports_using_property_value(caplog) -> None:
+    mapping = _property_mapping(default=None, include_property=True)
+    deps = _deps_for(mapping)
+
+    with caplog.at_level("INFO"):
+        result = handle_queue_message(
+            _updated_body(),
+            scope_mapping=mapping,
+            sync_deps=deps,
+        )
+
+    assert result.settlement == "complete"
+    assert result.normalized is not None
+    assert result.normalized.event_type == "repo.created"
+    assert result.normalized.scope_id == "sample-org"
+    assert isinstance(result.scope_resolution, ResolvedScopeMapping)
+    assert result.scope_resolution.snyk_org_id == "org-by-property"
+    assert "Resolved scope mapping" in caplog.text
+    assert "scope_mapping_default" not in caplog.text
+    deps.snyk.start_import.assert_called_once()
+    assert deps.snyk.start_import.call_args.args[0] == "org-by-property"
+    target = deps.snyk.start_import.call_args.args[2]
+    assert target.owner == "sample-org"
+    assert target.name == "sample-repo"
+    deps.snyk.deactivate_all_projects_for_target.assert_not_called()
+    deps.snyk.delete_snyk_target.assert_not_called()
+    followup = result.scheduled_followups[0].body
+    assert followup["adoProjectName"] == "sample-org"
+    assert followup["extractedPropertyValue"] == "sample-project"
+    assert "adoTarget" not in followup
+
+
+def test_updated_event_without_property_row_uses_default_org(caplog) -> None:
+    mapping = _property_mapping(default="default-org", include_property=False)
+    deps = _deps_for(mapping)
+
+    with caplog.at_level("INFO"):
+        result = handle_queue_message(
+            _updated_body(),
+            scope_mapping=mapping,
+            sync_deps=deps,
+        )
+
+    assert isinstance(result.scope_resolution, ResolvedScopeMapping)
+    assert result.scope_resolution.resolution == "default"
+    assert result.scope_resolution.snyk_org_id == "default-org"
+    assert "scope_mapping_default" in caplog.text
+    assert "extracted_value=sample-project" in caplog.text
+    deps.snyk.start_import.assert_called_once()
+    assert deps.snyk.start_import.call_args.args[0] == "default-org"
+
+
+def test_updated_event_without_mapping_or_default_skips_snyk(caplog) -> None:
+    mapping = _property_mapping(default=None, include_property=False)
+    deps = _deps_for(mapping)
+
+    with caplog.at_level("WARNING"):
+        result = handle_queue_message(
+            _updated_body(),
+            scope_mapping=mapping,
+            sync_deps=deps,
+        )
+
+    assert isinstance(result.scope_resolution, UnmappedScope)
+    assert result.scope_resolution.lookup_key == "sample-project"
+    assert "scope_mapping_unmapped" in caplog.text
+    assert "extracted_value=sample-project" in caplog.text
+    assert result.scheduled_followups == ()
+    deps.snyk.start_import.assert_not_called()
+    deps.snyk.deactivate_all_projects_for_target.assert_not_called()
+    deps.snyk.delete_snyk_target.assert_not_called()

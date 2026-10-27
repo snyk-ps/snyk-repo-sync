@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from config.errors import ConfigError
 from config.scope_mapping import (
+    PropertyExtractionError,
     ResolvedScopeMapping,
     ScopeMappingSettings,
     UnmappedScope,
+    extract_scope_property,
     resolve_scope_mapping,
 )
 from snyk.client import SnykApiError
@@ -173,11 +175,24 @@ def handle_queue_message(
     else:
         normalized = normalize_ado_audit_record(message.provider_payload)
 
-    lookup_key = scope_lookup_key(normalized)
+    raw_body = message.raw_body if message.raw_body is not None else message.provider_payload
+    try:
+        extracted_value = extract_scope_property(
+            mapping,
+            source=normalized.source,
+            payload=raw_body,
+        )
+    except PropertyExtractionError as exc:
+        raise NormalizationError(str(exc)) from exc
+    if extracted_value is not None:
+        normalized = replace(normalized, scope_property_value=extracted_value)
+
+    lookup_key = extracted_value if extracted_value is not None else scope_lookup_key(normalized)
     resolution = resolve_scope_mapping(
         mapping,
         source=normalized.source,
-        lookup_key=lookup_key,
+        lookup_key=scope_lookup_key(normalized),
+        extracted_value=extracted_value,
     )
 
     if (
@@ -201,7 +216,7 @@ def handle_queue_message(
         )
 
     _log_normalized_event(normalized)
-    _log_scope_resolution(normalized, resolution)
+    _log_scope_resolution(normalized, resolution, lookup_key=lookup_key, extracted_value=extracted_value)
 
     if sync_deps is None or isinstance(resolution, UnmappedScope):
         return HandleResult(
@@ -265,6 +280,7 @@ def _handle_internal_message(
             import_job_id=internal.import_job_id,
             retry_count=internal.retry_count,
             scope_lookup_key=internal.ado_project_name,
+            extracted_property_value=internal.extracted_property_value,
             deps=deps,
         )
         return _handle_result_from_outcome(outcome)
@@ -281,6 +297,7 @@ def _handle_internal_message(
             "defaultBranch": internal.default_branch or "",
             "payload": internal.payload or {},
             "occurredAt": "",
+            "extractedPropertyValue": internal.extracted_property_value or "",
         },
         deps=deps,
     )
@@ -315,25 +332,46 @@ def _handle_result_from_outcome(
 def _log_scope_resolution(
     normalized: NormalizedEvent,
     resolution: ResolvedScopeMapping | UnmappedScope,
+    *,
+    lookup_key: str,
+    extracted_value: str | None,
 ) -> None:
-    lookup_key = scope_lookup_key(normalized)
+    extracted = f" extracted_value={extracted_value}" if extracted_value else ""
     if isinstance(resolution, UnmappedScope):
         logger.warning(
-            "Unmapped scope source=%s lookup_key=%s event_id=%s scope_id=%s",
+            "scope_mapping_unmapped source=%s lookup_key=%s event_id=%s "
+            "scope_id=%s repository_id=%s%s",
             resolution.source,
-            resolution.lookup_key,
+            lookup_key,
             normalized.event_id,
             normalized.scope_id,
+            normalized.repository_id,
+            extracted,
+        )
+        return
+
+    if resolution.resolution == "default":
+        logger.warning(
+            "scope_mapping_default source=%s lookup_key=%s event_id=%s "
+            "scope_id=%s repository_id=%s snyk_org_id=%s%s",
+            normalized.source,
+            lookup_key,
+            normalized.event_id,
+            normalized.scope_id,
+            normalized.repository_id,
+            resolution.snyk_org_id,
+            extracted,
         )
         return
 
     logger.info(
         "Resolved scope mapping source=%s resolution=%s snyk_org_id=%s "
-        "event_id=%s scope_id=%s lookup_key=%s",
+        "event_id=%s scope_id=%s lookup_key=%s%s",
         normalized.source,
         resolution.resolution,
         resolution.snyk_org_id,
         normalized.event_id,
         normalized.scope_id,
         lookup_key,
+        extracted,
     )

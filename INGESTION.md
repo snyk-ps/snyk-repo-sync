@@ -67,7 +67,7 @@ Some GitHub deployments set `messaging.transport: kafka`. On that path:
 
 The endpoint has no application authentication. Do not create a public route. Configure customer-managed private networking so only the event connector can reach the configured `http.bindHost` and `http.port`. Terminate TLS and enforce source restrictions in the deployment network. Set the connector request timeout longer than the worker's initial synchronous processing time.
 
-The endpoint accepts the existing `renamed`, `edited`, and `deleted` payload shapes. It rejects `created` and ADO payloads. It also rejects `updated` and revised connector payloads until a later fixture-driven change defines their contracts, normalization, and `updated` Snyk Organization mapping. Do not route those deferred event shapes to this endpoint.
+The endpoint accepts `renamed`, `edited`, `deleted`, and the CloudEvents envelope `ENVLOG.GitHub.custom_property_values.updated` (`data/fixtures/github_parsed_updated.json`). That updated envelope is the GitHub import and selects the Snyk org from `scopeMapping` property values. It rejects `created` and ADO payloads. Importing from this event does not deactivate an existing Azure DevOps Snyk target.
 
 Assign the worker identity **Storage Queue Data Contributor** on the storage account and **Storage Table Data Contributor** on the table or account. Configure `storageQueue` and `http` as described in **[CONFIGURATION.md](CONFIGURATION.md)**. Keep minimum replicas at one because this guide does not define a Storage Queue scaler.
 
@@ -186,27 +186,29 @@ Supported ADO audit `ActionId` values:
 | Repository deleted | `Git.RepositoryDeleted` |
 | Default branch changed | `Git.RepositoryDefaultBranchChanged` |
 
-### GitHub (two supported JSON shapes)
+### GitHub (three supported JSON shapes)
 
-The worker detects GitHub by top-level `repository` and `action`. Messages are either **raw webhook JSON** (snake_case) or a **GitHubHooks parsed repository event** (camelCase repository + top-level `deliveryId`).
+The worker detects raw webhook and parsed lifecycle JSON by top-level `repository` and `action`. It detects the updated import by `type: ENVLOG.GitHub.custom_property_values.updated`.
 
 | Shape | Detection | Idempotency `eventId` |
 | ----- | --------- | --------------------- |
-| Parsed contract | `deliveryId` present | `deliveryId` |
-| Raw webhook | no `deliveryId` | `repository.updated_at`-based fallback or ingress metadata |
+| Parsed updated | `type` is `ENVLOG.GitHub.custom_property_values.updated` | `data.deliveryId` |
+| Parsed contract | top-level `deliveryId` | `deliveryId` |
+| Raw webhook | otherwise | `repository.updated_at`-based fallback or ingress metadata |
 
-**Scope:** `repository.owner.login` when `owner.type` is `Organization` (sync-state partition `github:{orgLogin}`).
+**Scope:** `repository.owner.login` (or `data.repository.owner.login` on the updated envelope) when `owner.type` is `Organization` (sync-state partition `github:{orgLogin}`). Snyk org selection can use a configured property value instead of the org login. See **[CONFIGURATION.md](CONFIGURATION.md)**.
 
 **Actions:**
 
-| `action` | Normalized lifecycle |
-| -------- | -------------------- |
-| `created` | `repo.created` |
+| Inbound signal | Normalized lifecycle |
+| -------------- | -------------------- |
+| `ENVLOG.GitHub.custom_property_values.updated` | `repo.created` (the import for this contract) |
+| `created` | `repo.created` for existing raw webhook and parsed lifecycle fixtures |
 | `renamed` | `repo.renamed` (`changes.repository.name.from` → previous name when present) |
 | `deleted` | `repo.deleted` |
 | `edited` | `repo.default_branch_changed` only when `changes.default_branch.from` is set; otherwise no sync |
 
-Fixtures: `data/fixtures/github_webhook_*.json`, `data/fixtures/github_parsed_*.json`.
+Fixtures: `data/fixtures/github_webhook_*.json`, `data/fixtures/github_parsed_*.json`, including `github_parsed_updated.json`.
 
 ---
 

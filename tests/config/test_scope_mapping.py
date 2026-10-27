@@ -6,9 +6,11 @@ from config.errors import ConfigError
 from config.scope_mapping import (
     AdoScopeEntry,
     GitHubScopeEntry,
+    PropertyExtractionError,
     ResolvedScopeMapping,
     ScopeMappingSettings,
     UnmappedScope,
+    extract_scope_property,
     parse_scope_mapping,
     resolve_integration_settings,
     resolve_scope_mapping,
@@ -259,3 +261,276 @@ def test_resolve_scope_mapping_unmapped() -> None:
     result = resolve_scope_mapping(mapping, source="ado", lookup_key="unknown")
 
     assert result == UnmappedScope(lookup_key="unknown", source="ado")
+
+
+def _github_extractor() -> dict[str, str]:
+    return {
+        "collectionPath": "data.newPropertyValues",
+        "matchField": "property_name",
+        "matchValue": "azure-devops-project",
+        "valueField": "value",
+    }
+
+
+def test_parse_property_extractor_and_property_value() -> None:
+    settings = parse_scope_mapping(
+        {
+            "propertyExtractors": {"github": _github_extractor()},
+            "github-cloud-app": [
+                {"orgName": "sample-org", "snykOrgId": "org-by-name"},
+                {
+                    "propertyValue": "sample-project",
+                    "snykOrgId": "org-by-property",
+                    "snykIntegrationId": "integration-9",
+                },
+            ],
+        },
+    )
+
+    extractor = settings.property_extractors["github"]
+    assert extractor.collection_path == ("data", "newPropertyValues")
+    assert extractor.match_value == "azure-devops-project"
+    entry = settings.github_by_property_value["sample-project"]
+    assert entry.snyk_org_id == "org-by-property"
+    assert entry.integration_type == "github-cloud-app"
+    assert entry.snyk_integration_id == "integration-9"
+
+
+@pytest.mark.parametrize(
+    ("path", "match"),
+    [
+        ("data..values", "dotted object path"),
+        ("data[0].values", "dotted object path"),
+        ("../values", "dotted object path"),
+        ("data.values[?(@.a)]", "dotted object path"),
+    ],
+)
+def test_parse_property_extractor_rejects_invalid_paths(path: str, match: str) -> None:
+    extractor = _github_extractor()
+    extractor["collectionPath"] = path
+    with pytest.raises(ConfigError, match=match):
+        parse_scope_mapping({"propertyExtractors": {"github": extractor}})
+
+
+def test_parse_property_extractor_rejects_unknown_provider() -> None:
+    with pytest.raises(ConfigError, match="not a supported provider"):
+        parse_scope_mapping(
+            {"propertyExtractors": {"bitbucket": _github_extractor()}},
+        )
+
+
+def test_parse_property_value_requires_extractor() -> None:
+    with pytest.raises(ConfigError, match="propertyExtractors.github"):
+        parse_scope_mapping(
+            {
+                "github": [{"propertyValue": "sample-project", "snykOrgId": "org"}],
+            },
+        )
+
+
+def test_parse_property_value_rejects_mixed_lookup_keys() -> None:
+    with pytest.raises(ConfigError, match="exactly one"):
+        parse_scope_mapping(
+            {
+                "propertyExtractors": {"github": _github_extractor()},
+                "github": [
+                    {
+                        "orgName": "sample-org",
+                        "propertyValue": "sample-project",
+                        "snykOrgId": "org",
+                    },
+                ],
+            },
+        )
+
+
+def test_parse_duplicate_property_value() -> None:
+    with pytest.raises(ConfigError, match="Duplicate scopeMapping GitHub propertyValue"):
+        parse_scope_mapping(
+            {
+                "propertyExtractors": {"github": _github_extractor()},
+                "github": [{"propertyValue": "sample-project", "snykOrgId": "org-1"}],
+                "github-enterprise": [
+                    {"propertyValue": "sample-project", "snykOrgId": "org-2"},
+                ],
+            },
+        )
+
+
+def test_extract_github_property_and_resolve_without_org_fallback() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "defaultSnykOrgId": "default-org",
+            "propertyExtractors": {"github": _github_extractor()},
+            "github-cloud-app": [
+                {"orgName": "sample-org", "snykOrgId": "org-by-name"},
+                {"propertyValue": "sample-project", "snykOrgId": "org-by-property"},
+            ],
+        },
+    )
+    payload = {
+        "data": {
+            "newPropertyValues": [
+                {"property_name": "azure-devops-project", "value": "sample-project"},
+            ],
+        },
+    }
+
+    extracted = extract_scope_property(mapping, source="github", payload=payload)
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value=extracted,
+    )
+
+    assert extracted == "sample-project"
+    assert resolved == ResolvedScopeMapping(snyk_org_id="org-by-property", resolution="mapped")
+    settings = resolve_integration_settings(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value=extracted,
+    )
+    assert settings.integration_type == "github-cloud-app"
+
+
+def test_missing_property_path_uses_org_name() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "propertyExtractors": {"github": _github_extractor()},
+            "github": [{"orgName": "sample-org", "snykOrgId": "org-by-name"}],
+        },
+    )
+
+    extracted = extract_scope_property(mapping, source="github", payload={"action": "created"})
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value=extracted,
+    )
+
+    assert extracted is None
+    assert resolved == ResolvedScopeMapping(snyk_org_id="org-by-name", resolution="mapped")
+
+
+def test_unlisted_extracted_value_skips_org_name_for_default() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "defaultSnykOrgId": "default-org",
+            "propertyExtractors": {"github": _github_extractor()},
+            "github": [
+                {"orgName": "sample-org", "snykOrgId": "org-by-name"},
+                {"propertyValue": "known", "snykOrgId": "org-by-property"},
+            ],
+        },
+    )
+    payload = {
+        "data": {
+            "newPropertyValues": [
+                {"property_name": "azure-devops-project", "value": "other-project"},
+            ],
+        },
+    }
+
+    extracted = extract_scope_property(mapping, source="github", payload=payload)
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value=extracted,
+    )
+
+    assert resolved == ResolvedScopeMapping(snyk_org_id="default-org", resolution="default")
+
+
+def test_unlisted_extracted_value_without_default_is_unmapped() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "propertyExtractors": {"github": _github_extractor()},
+            "github": [{"propertyValue": "known", "snykOrgId": "org-by-property"}],
+        },
+    )
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value="other-project",
+    )
+
+    assert resolved == UnmappedScope(lookup_key="other-project", source="github")
+
+
+def test_extract_ado_property_from_synthetic_payload() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "propertyExtractors": {
+                "azure-repos": {
+                    "collectionPath": "data.properties",
+                    "matchField": "name",
+                    "matchValue": "team",
+                    "valueField": "value",
+                },
+            },
+            "azure-repos": [{"propertyValue": "platform", "snykOrgId": "ado-org"}],
+        },
+    )
+    payload = {"data": {"properties": [{"name": "team", "value": "platform"}]}}
+
+    extracted = extract_scope_property(mapping, source="ado", payload=payload)
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="ado",
+        lookup_key="Contoso",
+        extracted_value=extracted,
+    )
+
+    assert extracted == "platform"
+    assert resolved == ResolvedScopeMapping(snyk_org_id="ado-org", resolution="mapped")
+
+
+def test_extract_blank_property_value_is_absent() -> None:
+    mapping = parse_scope_mapping(
+        {"propertyExtractors": {"github": _github_extractor()}},
+    )
+    payload = {
+        "data": {
+            "newPropertyValues": [
+                {"property_name": "azure-devops-project", "value": None},
+            ],
+        },
+    }
+
+    assert extract_scope_property(mapping, source="github", payload=payload) is None
+
+
+def test_extract_conflicting_property_values() -> None:
+    mapping = parse_scope_mapping(
+        {"propertyExtractors": {"github": _github_extractor()}},
+    )
+    payload = {
+        "data": {
+            "newPropertyValues": [
+                {"property_name": "azure-devops-project", "value": "one"},
+                {"property_name": "azure-devops-project", "value": "two"},
+            ],
+        },
+    }
+
+    with pytest.raises(PropertyExtractionError, match="conflicting"):
+        extract_scope_property(mapping, source="github", payload=payload)
+
+
+def test_extract_wrong_json_type() -> None:
+    mapping = parse_scope_mapping(
+        {"propertyExtractors": {"github": _github_extractor()}},
+    )
+
+    with pytest.raises(PropertyExtractionError, match="array"):
+        extract_scope_property(
+            mapping,
+            source="github",
+            payload={"data": {"newPropertyValues": {"property_name": "azure-devops-project"}}},
+        )

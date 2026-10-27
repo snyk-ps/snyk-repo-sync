@@ -36,11 +36,15 @@ class GitHubNoLifecycleAction(Exception):
     """Raised when a GitHub payload is valid but requires no lifecycle sync."""
 
 
+GITHUB_UPDATED_TYPE = "ENVLOG.GitHub.custom_property_values.updated"
+
+
 class GitHubMessageShape(str, Enum):
     """Discriminator for inbound GitHub queue JSON shapes."""
 
     RAW_WEBHOOK = "raw_webhook"
     PARSED_CONTRACT = "parsed_contract"
+    PARSED_UPDATED = "parsed_updated"
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ class NormalizedEvent:
     ado: AdoScope | None = None
     github: GitHubScope | None = None
     payload: dict[str, str] = field(default_factory=dict)
+    scope_property_value: str | None = None
 
     def __post_init__(self) -> None:
         if self.source == "ado":
@@ -124,7 +129,9 @@ def owner_name(event: NormalizedEvent) -> str:
 
 
 def detect_github_message_shape(payload: dict[str, Any]) -> GitHubMessageShape:
-    """Classify GitHub queue JSON as raw webhook or parsed contract."""
+    """Classify GitHub queue JSON as updated, parsed contract, or raw webhook."""
+    if payload.get("type") == GITHUB_UPDATED_TYPE:
+        return GitHubMessageShape.PARSED_UPDATED
     delivery_id = payload.get("deliveryId")
     if isinstance(delivery_id, str) and delivery_id.strip():
         return GitHubMessageShape.PARSED_CONTRACT
@@ -143,7 +150,9 @@ def normalize_github_queue_payload(
         NormalizationError: When the payload is incomplete or unsupported.
     """
     shape = detect_github_message_shape(payload)
-    if shape is GitHubMessageShape.PARSED_CONTRACT:
+    if shape is GitHubMessageShape.PARSED_UPDATED:
+        canonical = adapt_github_parsed_updated(payload)
+    elif shape is GitHubMessageShape.PARSED_CONTRACT:
         canonical = adapt_github_parsed_contract(payload)
     else:
         canonical = adapt_github_raw_webhook(payload)
@@ -178,6 +187,33 @@ def adapt_github_raw_webhook(payload: dict[str, Any]) -> GitHubCanonicalInput:
         owner_type=owner_type,
         previous_repo_name=previous_repo_name,
         previous_default_branch=previous_default_branch,
+    )
+
+
+def adapt_github_parsed_updated(payload: dict[str, Any]) -> GitHubCanonicalInput:
+    """Map a custom-property updated envelope to canonical GitHub import input."""
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise NormalizationError("github parsed updated: missing data object")
+    delivery_id = _require_non_empty_str(data, "deliveryId", context="github parsed updated")
+    repository = _require_repository_object(data, context="github parsed updated")
+    owner = _require_owner_on_repository(repository, context="github parsed updated")
+    org_login = _require_non_empty_str(owner, "login", context="github owner")
+    owner_type = _require_non_empty_str(owner, "type", context="github owner")
+    repository_id = _stringify_id(repository.get("id"), context="github repository.id")
+    repository_name = _require_non_empty_str(repository, "name", context="github repository")
+    default_branch = _optional_str(repository.get("defaultBranch"))
+    envelope_time = _optional_str(payload.get("time"))
+    updated_at = envelope_time or _optional_str(repository.get("updatedAt"))
+    return GitHubCanonicalInput(
+        delivery_id=delivery_id,
+        action="created",
+        repository_id=repository_id,
+        repository_name=repository_name,
+        default_branch=default_branch,
+        updated_at=updated_at,
+        org_login=org_login,
+        owner_type=owner_type,
     )
 
 
@@ -299,10 +335,38 @@ def _parse_timestamp(value: Any) -> datetime:
         raise NormalizationError("timestamp must be a non-empty ISO-8601 string")
 
     normalized = value.replace("Z", "+00:00")
+    parsed = _from_iso(normalized)
+    if parsed is None:
+        trimmed = _trim_fractional_seconds(normalized)
+        parsed = _from_iso(trimmed) if trimmed != normalized else None
+    if parsed is None:
+        raise NormalizationError("timestamp must be a valid ISO-8601 timestamp")
+    return parsed
+
+
+def _from_iso(value: str) -> datetime | None:
     try:
-        return datetime.fromisoformat(normalized)
-    except ValueError as exc:
-        raise NormalizationError("timestamp must be a valid ISO-8601 timestamp") from exc
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _trim_fractional_seconds(value: str) -> str:
+    """Keep at most six fractional digits so nanosecond stamps parse."""
+    if "." not in value:
+        return value
+    head, tail = value.split(".", 1)
+    digits: list[str] = []
+    rest = ""
+    for index, char in enumerate(tail):
+        if char.isdigit():
+            digits.append(char)
+            continue
+        rest = tail[index:]
+        break
+    if len(digits) <= 6:
+        return value
+    return f"{head}.{''.join(digits[:6])}{rest}"
 
 
 def _require_non_empty_str(data: dict[str, Any], key: str, *, context: str) -> str:

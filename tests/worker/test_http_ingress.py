@@ -80,6 +80,15 @@ def _app(
     )
 
 
+def test_parsed_updated_fixture_returns_204() -> None:
+    body = (FIXTURES / "github_parsed_updated.json").read_bytes()
+
+    status, _headers, response_body = asyncio.run(_request(_app(), body))
+
+    assert status == 204
+    assert response_body == b""
+
+
 @pytest.mark.parametrize(
     "fixture_name",
     [
