@@ -44,9 +44,9 @@ The event connector treats any 2xx response as acknowledgement and any non-2xx r
 - **THEN** the endpoint returns a non-2xx response and does not acknowledge the connector message
 
 ### Requirement: Kafka GitHub event boundary
-The intended Kafka endpoint event set MUST be GitHub `updated`, `renamed`, `edited`, and `deleted`; GitHub `created` MUST NOT be part of this endpoint contract. This change MUST process already-supported `renamed`, `edited`, and `deleted` payload shapes through the existing normalizer.
+The intended Kafka endpoint event set MUST be GitHub `updated`, `renamed`, `edited`, and `deleted`. GitHub `created` MUST NOT be part of this endpoint contract. The endpoint MUST process already-supported `renamed`, `edited`, and `deleted` payload shapes through the existing normalizer.
 
-Until a subsequent fixture-driven message-contract change defines the revised connector payloads, `updated` and any revised connector shape MUST return non-2xx. This change MUST NOT infer the `updated` schema or its Snyk organization mapping.
+The endpoint MUST accept the parsed updated CloudEvents envelope in `data/fixtures/github_parsed_updated.json` (`type: ENVLOG.GitHub.custom_property_values.updated`). That envelope is the import event for this contract. The endpoint MUST pass it to lifecycle processing. A successful import MUST return 204 under the synchronous acknowledgement requirement.
 
 ADO/Azure Repos payloads MUST return non-2xx and MUST NOT enter lifecycle processing on this endpoint.
 
@@ -54,9 +54,9 @@ ADO/Azure Repos payloads MUST return non-2xx and MUST NOT enter lifecycle proces
 - **WHEN** the connector posts an already-supported GitHub `renamed` payload
 - **THEN** the endpoint processes the rename and returns 204 after successful processing
 
-#### Scenario: Updated contract is pending
-- **WHEN** the connector posts an `updated` payload before the subsequent message-contract change is implemented
-- **THEN** the endpoint returns non-2xx and does not guess how to normalize or map the payload
+#### Scenario: Parsed updated envelope is the import
+- **WHEN** the connector posts the `github_parsed_updated.json` body
+- **THEN** the endpoint normalizes it for import and returns 204 after successful processing
 
 #### Scenario: Created is not a Kafka endpoint event
 - **WHEN** the connector posts a GitHub payload with `action: created`
@@ -84,3 +84,4 @@ The HTTP port MUST be between 1 and 65535, maximum request-body bytes MUST be po
 #### Scenario: Invalid Kafka HTTP configuration
 - **WHEN** `messaging.transport` is `kafka` and an HTTP port or processing-concurrency value is invalid after config and environment merge
 - **THEN** startup fails with a clear configuration error
+

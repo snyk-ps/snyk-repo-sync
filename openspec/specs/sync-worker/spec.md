@@ -16,19 +16,21 @@ On `serviceBus`, provider events and internal follow-ups come from the Service B
 ### Requirement: Multi-source event normalization
 The worker MUST parse native queue messages and produce a normalized internal lifecycle event model before sync state access or lifecycle actions. Lifecycle normalization MUST be implemented in the worker application in this repository, not in customer-owned ingress infrastructure.
 
-The worker MUST infer `source` from message structure:
+The worker MUST infer `source` from message structure. ADO identification MUST be applied before GitHub identification:
 
 | Detected source | Identification rule |
 | --------------- | ------------------- |
 | `"ado"` | `eventType` is `AzureDevOpsAuditEvent` **or** `subject` is `AzureDevOps/Auditing` |
+| `"github"` | `type` is `ENVLOG.GitHub.custom_property_values.updated` and `data` is an object |
 | `"github"` | Top-level JSON with `repository` object and string `action` (when not ADO) |
 
-For ADO, the audit record MUST be read from Event Grid `data`. For GitHub, the queue message body is the full GitHub payload (raw webhook or parsed contract).
+For ADO, the audit record MUST be read from Event Grid `data`. For GitHub raw webhook and parsed lifecycle messages, the queue message body is the full GitHub payload. For the parsed updated envelope, repository fields MUST be read from `data.repository`.
 
-GitHub messages MUST be classified by shape:
+GitHub messages MUST be classified by shape in this order:
 
 | Shape | Detection |
 | ----- | --------- |
+| Parsed updated | `type` is `ENVLOG.GitHub.custom_property_values.updated` |
 | Parsed contract | Non-empty string top-level `deliveryId` |
 | Raw webhook | Otherwise |
 
@@ -37,14 +39,14 @@ The normalized model MUST include:
 | Field | Type | ADO source | GitHub source |
 | ----- | ---- | ---------- | ------------- |
 | `source` | `"ado"` \| `"github"` | inferred | inferred |
-| `eventId` | string | audit `Id` in `data` | parsed: `deliveryId`; raw: delivery id from message metadata when available |
-| `eventType` | lifecycle enum | audit `ActionId` | webhook `action` (see GitHub mapping) |
-| `scopeId` | string | `ProjectId` | org login (`repository.owner.login`) |
+| `eventId` | string | audit `Id` in `data` | parsed lifecycle: `deliveryId`; parsed updated: `data.deliveryId`; raw: delivery id from message metadata when available |
+| `eventType` | lifecycle enum | audit `ActionId` | webhook `action` or updated envelope (see GitHub mapping) |
+| `scopeId` | string | `ProjectId` | org login (`repository.owner.login`, or `data.repository.owner.login` for parsed updated) |
 | `repositoryId` | string | `Data.RepoId` | `repository.id` (string) |
-| `occurredAt` | datetime UTC | audit `Timestamp` | raw: `repository.updated_at`; parsed: `repository.updatedAt` |
+| `occurredAt` | datetime UTC | audit `Timestamp` | raw: `repository.updated_at`; parsed lifecycle: `repository.updatedAt`; parsed updated: envelope `time` when present, otherwise `data.repository.updatedAt` |
 | `ado` | object | ADO scope table | absent |
 | `github` | object | absent | see GitHub scope table |
-| `repository` | object | `name` ← `Data.RepoName` | `name` ← `repository.name` |
+| `repository` | object | `name` ← `Data.RepoName` | `name` ← repository `name` |
 | `payload` | object | event-specific | event-specific |
 
 Supported `eventType` values: `repo.created`, `repo.renamed`, `repo.deleted`, `repo.default_branch_changed`.
@@ -62,9 +64,11 @@ When `source` is `"github"`, the `github` object MUST include:
 
 | Field | Source |
 | ----- | ------ |
-| `orgLogin` | `repository.owner.login` (MUST equal `scopeId`) |
+| `orgLogin` | repository owner login (MUST equal `scopeId`) |
 
 The `ado` object MUST be absent when `source` is `"github"`. The `github` object MUST be absent when `source` is `"ado"`.
+
+Property values used for Snyk org selection MUST NOT replace `scopeId` or `github.orgLogin`.
 
 ADO audit `ActionId` mapping:
 
@@ -75,11 +79,12 @@ ADO audit `ActionId` mapping:
 | `Git.RepositoryDeleted` | `repo.deleted` |
 | `Git.RepositoryDefaultBranchChanged` | `repo.default_branch_changed` |
 
-GitHub webhook `action` mapping:
+GitHub mapping:
 
-| `action` | `eventType` | Conditions |
+| Inbound signal | `eventType` | Conditions |
 | -------- | ----------- | ---------- |
-| `created` | `repo.created` | — |
+| `ENVLOG.GitHub.custom_property_values.updated` | `repo.created` | `data.repository` present; this is the import for the parsed updated contract |
+| `action: created` | `repo.created` | existing raw webhook and parsed lifecycle fixtures only |
 | `renamed` | `repo.renamed` | — |
 | `deleted` | `repo.deleted` | — |
 | `edited` | `repo.default_branch_changed` | `changes.default_branch.from` present (snake_case in parsed contract) |
@@ -96,7 +101,9 @@ Normalized `payload` fields by `eventType`:
 
 Branch values in `payload` MUST NOT include the `refs/heads/` prefix.
 
-GitHub repositories with `repository.owner.type` other than `Organization` MUST complete without normalization error and without lifecycle sync.
+GitHub repositories with owner type other than `Organization` MUST complete without normalization error and without lifecycle sync.
+
+Existing fixtures under `data/fixtures/github_webhook_*.json`, `data/fixtures/github_parsed_created.json`, `data/fixtures/github_parsed_renamed.json`, `data/fixtures/github_parsed_deleted.json`, `data/fixtures/github_parsed_edited_*.json`, and `data/fixtures/eventgrid_ado_*.json` MUST keep their current normalized outcomes.
 
 #### Scenario: ADO audit stream normalized to repo created
 - **WHEN** the worker receives an Event Grid message identified as ADO with audit `ActionId: Git.RepositoryCreated` and required scope, project, and repository fields in `data`
@@ -121,6 +128,10 @@ GitHub repositories with `repository.owner.type` other than `Organization` MUST 
 #### Scenario: GitHub parsed contract normalized to repo created
 - **WHEN** the worker receives parsed JSON with `deliveryId`, `action: created`, and camelCase repository fields
 - **THEN** it produces a normalized event with `eventId` equal to `deliveryId` and the same normalized fields as the raw created scenario
+
+#### Scenario: GitHub parsed updated normalized to repo created
+- **WHEN** the worker receives `data/fixtures/github_parsed_updated.json`
+- **THEN** it produces `source: github`, `eventType: repo.created`, `eventId` equal to `data.deliveryId`, `scopeId` and `github.orgLogin` equal to `sample-org`, and `repository.name` equal to `sample-repo`
 
 #### Scenario: GitHub renamed with previous name in changes
 - **WHEN** the worker receives GitHub JSON with `action: renamed` and `changes.repository.name.from`
@@ -152,7 +163,7 @@ Unmapped scopes MUST log and complete without Snyk side effects per the `scope-m
 - **THEN** the worker removes the target per configured removal mode, updates repository state, and completes the message
 
 #### Scenario: Successful GitHub repo create
-- **WHEN** a repo-created event with `source: "github"` passes idempotency checks and scope mapping resolves a Snyk org by org login
+- **WHEN** a repo-created event with `source: "github"` passes idempotency checks and scope mapping resolves a Snyk org
 - **THEN** the worker triggers import, upserts pending repository state, schedules import job polling if needed, and completes or dead-letters the message per retry policy
 
 ### Requirement: Idempotency by event and desired state
@@ -473,4 +484,17 @@ The repository MUST include integration tests that post already-supported GitHub
 #### Scenario: Failed processing is retryable
 - **WHEN** an integration test injects a processing or follow-up scheduling failure
 - **THEN** the endpoint returns non-2xx
+
+### Requirement: Custom property updated imports the GitHub repository
+The worker MUST normalize `ENVLOG.GitHub.custom_property_values.updated` to `repo.created` and MUST run the existing GitHub create flow for that event. This event is the import signal for the parsed updated contract. The worker MUST NOT require a GitHub `action: created` body before importing.
+
+The worker MUST NOT deactivate or delete an Azure DevOps Snyk target because a GitHub updated event imported the repository. It MUST NOT persist a link from the GitHub repository to an ADO project or ADO target.
+
+#### Scenario: Updated envelope imports the GitHub repository
+- **WHEN** the worker receives `data/fixtures/github_parsed_updated.json` and scope mapping resolves a Snyk org
+- **THEN** it runs the GitHub `repo.created` import path for `data.repository`
+
+#### Scenario: Updated import leaves ADO targets in place
+- **WHEN** the GitHub updated event imports a repository whose `azure-devops-project` value names an ADO project that already has a Snyk target
+- **THEN** the worker does not deactivate or delete that ADO target
 
