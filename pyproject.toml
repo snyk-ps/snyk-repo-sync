@@ -24,3 +24,14 @@ testpaths = ["tests"]
 markers = [
     "integration: tests requiring Service Bus configuration",
 ]
+
+[tool.uv]
+# Transitive-only security floors for the Azure dependency tree (Snyk Open
+# Source scan, 2026-10-27). Not application dependencies: pyjwt, urllib3, and
+# certifi are pulled in via azure-identity -> msal and azure-data-tables ->
+# azure-core -> requests. Each floor keeps Python 3.12 support.
+constraint-dependencies = [
+    "pyjwt>=2.15.0",
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.19",
+]
