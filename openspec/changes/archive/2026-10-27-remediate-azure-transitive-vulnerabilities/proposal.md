@@ -16,7 +16,7 @@ A Snyk Open Source scan of the committed `uv.lock` on 2026-10-27, using the proj
 
 ### New Capabilities
 
-- `azure-dependency-security`: The committed Azure dependency tree resolves `pyjwt`, `urllib3`, and `certifi` to the fixed versions above, each compatible with Python 3.12, and has no high or critical Snyk Open Source findings.
+_None._ The version floors live in `pyproject.toml` and `uv.lock`. The bar against high and critical dependency findings is the project guideline, not a new capability.
 
 ### Modified Capabilities
 
