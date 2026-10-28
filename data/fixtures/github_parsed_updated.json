@@ -1,57 +1,45 @@
 {
-  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "specversion": "1.0",
-  "type": "ENVLOG.GitHub.custom_property_values.updated",
-  "version": "1.0",
-  "source": "ENVLOG.GitHub.HandleEvents",
-  "datacontenttype": "application/json",
-  "time": "2026-10-01T12:00:00.000000000Z",
-  "data": {
-    "deliveryId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-    "repository": {
-      "id": 123456789,
-      "name": "sample-repo",
-      "fullName": "sample-org/sample-repo",
-      "description": "sample repository",
-      "isTemplate": false,
-      "language": null,
-      "visibility": "internal",
-      "defaultBranch": "main",
-      "createdAt": "2026-09-01T12:00:00Z",
-      "updatedAt": "2026-09-02T12:00:00Z",
-      "pushedAt": "2026-10-01T11:00:00Z",
-      "size": 11,
-      "openIssuesCount": 3,
-      "owner": {
-        "login": "sample-org",
-        "type": "Organization"
-      }
-    },
-    "oldPropertyValues": [
-      {
-        "property_name": "azure-devops-project",
-        "value": null
-      },
-      {
-        "property_name": "safe-settings-namespace",
-        "value": null
-      }
-    ],
-    "newPropertyValues": [
-      {
-        "property_name": "azure-devops-project",
-        "value": "sample-project"
-      },
-      {
-        "property_name": "safe-settings-namespace",
-        "value": "sample-namespace"
-      }
-    ],
-    "sender": {
-      "login": "octocat"
+  "deliveryId": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+  "repository": {
+    "id": 123456789,
+    "name": "sample-repo",
+    "fullName": "sample-org/sample-repo",
+    "description": "sample repository",
+    "isTemplate": false,
+    "language": null,
+    "visibility": "internal",
+    "defaultBranch": "main",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "updatedAt": "2026-09-02T12:00:00Z",
+    "pushedAt": "2026-10-01T11:00:00Z",
+    "size": 11,
+    "openIssuesCount": 3,
+    "owner": {
+      "login": "sample-org",
+      "type": "Organization"
     }
   },
-  "iaspecversion": "0.5",
-  "correlationid": "c3d4e5f6-a7b8-9012-cdef-123456789012",
-  "env": "INTG"
+  "oldPropertyValues": [
+    {
+      "property_name": "azure-devops-project",
+      "value": null
+    },
+    {
+      "property_name": "safe-settings-namespace",
+      "value": null
+    }
+  ],
+  "newPropertyValues": [
+    {
+      "property_name": "azure-devops-project",
+      "value": "sample-project"
+    },
+    {
+      "property_name": "safe-settings-namespace",
+      "value": "sample-namespace"
+    }
+  ],
+  "sender": {
+    "login": "octocat"
+  }
 }

@@ -12,7 +12,7 @@ from config.scope_mapping import ScopeMappingSettings
 from config.settings import HttpSettings
 from worker.handler import ProcessingOutcome, process_message_body
 from worker.lifecycle import WorkerSyncDependencies
-from worker.normalize import GITHUB_UPDATED_TYPE
+from worker.normalize import is_github_parsed_updated_body
 
 logger = logging.getLogger(__name__)
 
@@ -160,11 +160,8 @@ def _validate_github_boundary(body: bytes) -> int | None:
         or data.get("subject") == "AzureDevOps/Auditing"
     ):
         return 422
-    if data.get("type") == GITHUB_UPDATED_TYPE and isinstance(data.get("data"), dict):
-        repository = data["data"].get("repository")
-        if isinstance(repository, dict):
-            return None
-        return 422
+    if is_github_parsed_updated_body(data):
+        return None
     action = data.get("action")
     repository = data.get("repository")
     if not isinstance(action, str) or not isinstance(repository, dict):

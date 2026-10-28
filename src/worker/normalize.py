@@ -36,9 +36,6 @@ class GitHubNoLifecycleAction(Exception):
     """Raised when a GitHub payload is valid but requires no lifecycle sync."""
 
 
-GITHUB_UPDATED_TYPE = "ENVLOG.GitHub.custom_property_values.updated"
-
-
 class GitHubMessageShape(str, Enum):
     """Discriminator for inbound GitHub queue JSON shapes."""
 
@@ -128,9 +125,22 @@ def owner_name(event: NormalizedEvent) -> str:
     return scope_lookup_key(event)
 
 
+def is_github_parsed_updated_body(payload: dict[str, Any]) -> bool:
+    """Return whether a GitHub body is the parsed updated import.
+
+    The import body has a ``repository`` object and a ``newPropertyValues`` array,
+    and it has no non-empty ``action``.
+    """
+    repository = payload.get("repository")
+    new_values = payload.get("newPropertyValues")
+    action = payload.get("action")
+    has_action = isinstance(action, str) and bool(action.strip())
+    return isinstance(repository, dict) and isinstance(new_values, list) and not has_action
+
+
 def detect_github_message_shape(payload: dict[str, Any]) -> GitHubMessageShape:
     """Classify GitHub queue JSON as updated, parsed contract, or raw webhook."""
-    if payload.get("type") == GITHUB_UPDATED_TYPE:
+    if is_github_parsed_updated_body(payload):
         return GitHubMessageShape.PARSED_UPDATED
     delivery_id = payload.get("deliveryId")
     if isinstance(delivery_id, str) and delivery_id.strip():
@@ -191,20 +201,16 @@ def adapt_github_raw_webhook(payload: dict[str, Any]) -> GitHubCanonicalInput:
 
 
 def adapt_github_parsed_updated(payload: dict[str, Any]) -> GitHubCanonicalInput:
-    """Map a custom-property updated envelope to canonical GitHub import input."""
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise NormalizationError("github parsed updated: missing data object")
-    delivery_id = _require_non_empty_str(data, "deliveryId", context="github parsed updated")
-    repository = _require_repository_object(data, context="github parsed updated")
+    """Map a parsed updated body to canonical GitHub import input."""
+    delivery_id = _require_non_empty_str(payload, "deliveryId", context="github parsed updated")
+    repository = _require_repository_object(payload, context="github parsed updated")
     owner = _require_owner_on_repository(repository, context="github parsed updated")
     org_login = _require_non_empty_str(owner, "login", context="github owner")
     owner_type = _require_non_empty_str(owner, "type", context="github owner")
     repository_id = _stringify_id(repository.get("id"), context="github repository.id")
     repository_name = _require_non_empty_str(repository, "name", context="github repository")
     default_branch = _optional_str(repository.get("defaultBranch"))
-    envelope_time = _optional_str(payload.get("time"))
-    updated_at = envelope_time or _optional_str(repository.get("updatedAt"))
+    updated_at = _optional_str(repository.get("updatedAt"))
     return GitHubCanonicalInput(
         delivery_id=delivery_id,
         action="created",

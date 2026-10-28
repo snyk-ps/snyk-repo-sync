@@ -280,7 +280,12 @@ def _updated_body() -> bytes:
     return fixture.read_bytes()
 
 
-def _property_mapping(*, default: str | None, include_property: bool) -> ScopeMappingSettings:
+def _property_mapping(
+    *,
+    default: str | None,
+    include_property: bool,
+    collection_path: str = "newPropertyValues",
+) -> ScopeMappingSettings:
     from config.scope_mapping import parse_scope_mapping
 
     github_rows: list[dict[str, str]] = [
@@ -293,7 +298,7 @@ def _property_mapping(*, default: str | None, include_property: bool) -> ScopeMa
     raw: dict[str, object] = {
         "propertyExtractors": {
             "github": {
-                "collectionPath": "data.newPropertyValues",
+                "collectionPath": collection_path,
                 "matchField": "property_name",
                 "matchValue": "azure-devops-project",
                 "valueField": "value",
@@ -348,6 +353,31 @@ def test_updated_event_imports_using_property_value(caplog) -> None:
     assert followup["adoProjectName"] == "sample-org"
     assert followup["extractedPropertyValue"] == "sample-project"
     assert "adoTarget" not in followup
+
+
+def test_updated_event_data_path_uses_org_login() -> None:
+    mapping = _property_mapping(
+        default=None,
+        include_property=True,
+        collection_path="data.newPropertyValues",
+    )
+    deps = _deps_for(mapping)
+
+    result = handle_queue_message(
+        _updated_body(),
+        scope_mapping=mapping,
+        sync_deps=deps,
+    )
+
+    assert result.settlement == "complete"
+    assert result.normalized is not None
+    assert result.normalized.scope_id == "sample-org"
+    assert isinstance(result.scope_resolution, ResolvedScopeMapping)
+    assert result.scope_resolution.snyk_org_id == "org-by-name"
+    deps.snyk.start_import.assert_called_once()
+    assert deps.snyk.start_import.call_args.args[0] == "org-by-name"
+    followup = result.scheduled_followups[0].body
+    assert "extractedPropertyValue" not in followup
 
 
 def test_updated_event_without_property_row_uses_default_org(caplog) -> None:

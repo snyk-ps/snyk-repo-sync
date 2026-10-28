@@ -32,6 +32,15 @@ def test_parse_github_fixture() -> None:
     assert message.provider_payload["action"] == "created"
 
 
+def test_parse_github_parsed_updated_fixture() -> None:
+    body = (FIXTURES / "github_parsed_updated.json").read_text(encoding="utf-8")
+    message = parse_queue_message(body)
+    assert message.source == "github"
+    assert message.event_id == "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+    assert message.provider_payload is not None
+    assert message.provider_payload["repository"]["updatedAt"] == "2026-09-02T12:00:00Z"
+
+
 def test_parse_github_parsed_contract_fixture() -> None:
     body = (FIXTURES / "github_parsed_created.json").read_text(encoding="utf-8")
     message = parse_queue_message(body)
