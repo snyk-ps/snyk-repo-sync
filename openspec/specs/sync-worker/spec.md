@@ -21,16 +21,16 @@ The worker MUST infer `source` from message structure. ADO identification MUST b
 | Detected source | Identification rule |
 | --------------- | ------------------- |
 | `"ado"` | `eventType` is `AzureDevOpsAuditEvent` **or** `subject` is `AzureDevOps/Auditing` |
-| `"github"` | `type` is `ENVLOG.GitHub.custom_property_values.updated` and `data` is an object |
+| `"github"` | `repository` is an object and `newPropertyValues` is an array, and `action` is not a non-empty string |
 | `"github"` | Top-level JSON with `repository` object and string `action` (when not ADO) |
 
-For ADO, the audit record MUST be read from Event Grid `data`. For GitHub raw webhook and parsed lifecycle messages, the queue message body is the full GitHub payload. For the parsed updated envelope, repository fields MUST be read from `data.repository`.
+For ADO, the audit record MUST be read from Event Grid `data`. For GitHub raw webhook, parsed lifecycle, and parsed updated messages, the queue message body is the full GitHub payload. For the parsed updated body, repository fields MUST be read from top-level `repository`.
 
 GitHub messages MUST be classified by shape in this order:
 
 | Shape | Detection |
 | ----- | --------- |
-| Parsed updated | `type` is `ENVLOG.GitHub.custom_property_values.updated` |
+| Parsed updated | `repository` is an object, `newPropertyValues` is an array, and `action` is not a non-empty string |
 | Parsed contract | Non-empty string top-level `deliveryId` |
 | Raw webhook | Otherwise |
 
@@ -39,11 +39,11 @@ The normalized model MUST include:
 | Field | Type | ADO source | GitHub source |
 | ----- | ---- | ---------- | ------------- |
 | `source` | `"ado"` \| `"github"` | inferred | inferred |
-| `eventId` | string | audit `Id` in `data` | parsed lifecycle: `deliveryId`; parsed updated: `data.deliveryId`; raw: delivery id from message metadata when available |
-| `eventType` | lifecycle enum | audit `ActionId` | webhook `action` or updated envelope (see GitHub mapping) |
-| `scopeId` | string | `ProjectId` | org login (`repository.owner.login`, or `data.repository.owner.login` for parsed updated) |
+| `eventId` | string | audit `Id` in `data` | parsed lifecycle and parsed updated: `deliveryId`; raw: delivery id from message metadata when available |
+| `eventType` | lifecycle enum | audit `ActionId` | webhook `action` or parsed updated body (see GitHub mapping) |
+| `scopeId` | string | `ProjectId` | org login (`repository.owner.login`) |
 | `repositoryId` | string | `Data.RepoId` | `repository.id` (string) |
-| `occurredAt` | datetime UTC | audit `Timestamp` | raw: `repository.updated_at`; parsed lifecycle: `repository.updatedAt`; parsed updated: envelope `time` when present, otherwise `data.repository.updatedAt` |
+| `occurredAt` | datetime UTC | audit `Timestamp` | raw: `repository.updated_at`; parsed lifecycle: `repository.updatedAt`; parsed updated: `repository.updatedAt` |
 | `ado` | object | ADO scope table | absent |
 | `github` | object | absent | see GitHub scope table |
 | `repository` | object | `name` ← `Data.RepoName` | `name` ← repository `name` |
@@ -83,7 +83,7 @@ GitHub mapping:
 
 | Inbound signal | `eventType` | Conditions |
 | -------- | ----------- | ---------- |
-| `ENVLOG.GitHub.custom_property_values.updated` | `repo.created` | `data.repository` present; this is the import for the parsed updated contract |
+| Parsed updated body | `repo.created` | `repository` is an object and `newPropertyValues` is an array; this is the import for the parsed updated contract |
 | `action: created` | `repo.created` | existing raw webhook and parsed lifecycle fixtures only |
 | `renamed` | `repo.renamed` | — |
 | `deleted` | `repo.deleted` | — |
@@ -131,7 +131,7 @@ Existing fixtures under `data/fixtures/github_webhook_*.json`, `data/fixtures/gi
 
 #### Scenario: GitHub parsed updated normalized to repo created
 - **WHEN** the worker receives `data/fixtures/github_parsed_updated.json`
-- **THEN** it produces `source: github`, `eventType: repo.created`, `eventId` equal to `data.deliveryId`, `scopeId` and `github.orgLogin` equal to `sample-org`, and `repository.name` equal to `sample-repo`
+- **THEN** it produces `source: github`, `eventType: repo.created`, `eventId` equal to `deliveryId` (`b2c3d4e5-f6a7-8901-bcde-f12345678901`), `scopeId` and `github.orgLogin` equal to `sample-org`, `repository.name` equal to `sample-repo`, and `occurredAt` equal to `repository.updatedAt` (`2026-09-02T12:00:00Z`)
 
 #### Scenario: GitHub renamed with previous name in changes
 - **WHEN** the worker receives GitHub JSON with `action: renamed` and `changes.repository.name.from`
@@ -290,7 +290,7 @@ The repository MUST include integration tests that publish native queue message 
 ### Requirement: Native queue message parsing
 The worker MUST deserialize inbound queue messages as JSON and identify the provider source from message structure. ADO messages MUST be identified when `eventType` is `AzureDevOpsAuditEvent` **or** `subject` is `AzureDevOps/Auditing`; the audit record MUST be extracted from `data`.
 
-GitHub messages MUST be identified by JSON shape (top-level `repository` and `action`). Parsed GitHub contract messages MUST be recognized when `deliveryId` is present.
+GitHub parsed updated messages MUST be identified when `repository` is an object, `newPropertyValues` is an array, and `action` is not a non-empty string. Other GitHub messages MUST be identified by JSON shape (top-level `repository` and `action`). Parsed GitHub contract messages MUST be recognized when `deliveryId` is present.
 
 Unrecognized or invalid JSON MUST dead-letter with reason `InvalidMessage`.
 
@@ -301,6 +301,10 @@ Unrecognized or invalid JSON MUST dead-letter with reason `InvalidMessage`.
 #### Scenario: Valid ADO message by eventType only
 - **WHEN** the worker receives Event Grid JSON with `eventType: AzureDevOpsAuditEvent` and a valid audit object in `data`
 - **THEN** it parses the message as ADO and extracts the audit record from `data`
+
+#### Scenario: Valid GitHub parsed updated message
+- **WHEN** the worker receives `data/fixtures/github_parsed_updated.json`
+- **THEN** it parses the message as GitHub parsed updated shape and uses top-level `deliveryId` as the event id
 
 #### Scenario: Valid GitHub raw webhook message
 - **WHEN** the worker receives raw webhook JSON with `repository` and `action` fields and no top-level `deliveryId`
@@ -486,13 +490,13 @@ The repository MUST include integration tests that post already-supported GitHub
 - **THEN** the endpoint returns non-2xx
 
 ### Requirement: Custom property updated imports the GitHub repository
-The worker MUST normalize `ENVLOG.GitHub.custom_property_values.updated` to `repo.created` and MUST run the existing GitHub create flow for that event. This event is the import signal for the parsed updated contract. The worker MUST NOT require a GitHub `action: created` body before importing.
+The worker MUST normalize the parsed updated body in `data/fixtures/github_parsed_updated.json` to `repo.created` and MUST run the existing GitHub create flow for that event. This body is the import signal for the parsed updated contract. The worker MUST NOT require a GitHub `action: created` body before importing.
 
 The worker MUST NOT deactivate or delete an Azure DevOps Snyk target because a GitHub updated event imported the repository. It MUST NOT persist a link from the GitHub repository to an ADO project or ADO target.
 
-#### Scenario: Updated envelope imports the GitHub repository
+#### Scenario: Updated body imports the GitHub repository
 - **WHEN** the worker receives `data/fixtures/github_parsed_updated.json` and scope mapping resolves a Snyk org
-- **THEN** it runs the GitHub `repo.created` import path for `data.repository`
+- **THEN** it runs the GitHub `repo.created` import path for that body's `repository`
 
 #### Scenario: Updated import leaves ADO targets in place
 - **WHEN** the GitHub updated event imports a repository whose `azure-devops-project` value names an ADO project that already has a Snyk target

@@ -23,4 +23,4 @@
 
 ## 6. Archive
 
-- [ ] 6.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/fix-github-updated-data-body/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive fix-github-updated-data-body` (or project equivalent) to fold deltas into canonical specs.
+- [x] 6.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/fix-github-updated-data-body/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive fix-github-updated-data-body` (or project equivalent) to fold deltas into canonical specs.
