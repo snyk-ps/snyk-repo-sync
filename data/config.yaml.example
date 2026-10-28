@@ -48,7 +48,7 @@ scopeMapping:
 #       # snykIntegrationId: "bbbbbbbb-..."       # optional
 #   propertyExtractors:
 #     github:
-#       collectionPath: data.newPropertyValues
+#       collectionPath: newPropertyValues
 #       matchField: property_name
 #       matchValue: azure-devops-project
 #       valueField: value

@@ -290,7 +290,7 @@ uv run python src/main.py worker run --config data/config.yaml
 - Syncs mapped ADO repos to Snyk: import with async job polling, configurable target removal (`deactivate` or `delete`), sync-state tracking
 - Schedules internal follow-up messages on the active follow-up queue for import polling and concurrency backpressure
 - Requires `SNYK_TOKEN` in the environment; project tagging deferred
-- Accepts GitHub `renamed`, `edited`, `deleted`, and `ENVLOG.GitHub.custom_property_values.updated` on Kafka ingress. The updated envelope is the GitHub import. `created` and ADO payloads return non-2xx
+- Accepts GitHub `renamed`, `edited`, `deleted`, and the parsed updated import (`data/fixtures/github_parsed_updated.json`) on Kafka ingress. That body has top-level `repository` and `newPropertyValues` and is the GitHub import. `created` and ADO payloads return non-2xx
 
 
 

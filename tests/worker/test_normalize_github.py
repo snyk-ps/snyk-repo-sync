@@ -1,6 +1,7 @@
 """Tests for GitHub lifecycle normalization (raw webhook and parsed contract)."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,7 @@ from worker.message import parse_queue_message
 from worker.normalize import (
     GitHubNoLifecycleAction,
     NormalizationError,
+    is_github_parsed_updated_body,
     normalize_github_queue_payload,
 )
 
@@ -62,8 +64,10 @@ def test_parse_queue_message_sets_event_id_from_delivery_id() -> None:
 
 
 def test_parsed_updated_normalizes_to_repo_created() -> None:
-    event = normalize_github_queue_payload(_load("github_parsed_updated.json"))
+    payload = _load("github_parsed_updated.json")
+    event = normalize_github_queue_payload(payload)
 
+    assert is_github_parsed_updated_body(payload)
     assert event.source == "github"
     assert event.event_type == "repo.created"
     assert event.event_id == "b2c3d4e5-f6a7-8901-bcde-f12345678901"
@@ -73,9 +77,29 @@ def test_parsed_updated_normalizes_to_repo_created() -> None:
     assert event.ado is None
     assert event.repository.name == "sample-repo"
     assert event.payload["defaultBranch"] == "main"
-    assert event.occurred_at.year == 2026
-    assert event.occurred_at.month == 10
-    assert event.occurred_at.day == 1
+    assert event.occurred_at == datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+
+
+def test_parsed_updated_fixture_parses_as_github() -> None:
+    body = (FIXTURES / "github_parsed_updated.json").read_text(encoding="utf-8")
+    message = parse_queue_message(body)
+
+    assert message.source == "github"
+    assert message.event_id == "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+    assert message.provider_payload["repository"]["name"] == "sample-repo"
+    assert message.provider_payload["newPropertyValues"][0]["value"] == "sample-project"
+
+
+def test_lifecycle_action_with_property_values_stays_on_action_path() -> None:
+    payload = _load("github_parsed_renamed.json")
+    payload["newPropertyValues"] = [
+        {"property_name": "azure-devops-project", "value": "sample-project"},
+    ]
+
+    event = normalize_github_queue_payload(payload)
+
+    assert not is_github_parsed_updated_body(payload)
+    assert event.event_type == "repo.renamed"
 
 
 @pytest.mark.parametrize(

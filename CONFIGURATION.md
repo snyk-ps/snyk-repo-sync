@@ -94,7 +94,7 @@ Individual settings MAY be overridden by environment variables; **env values tak
 
 The endpoint has no application authentication. Do not expose it publicly. Provide a customer-managed private route that allows only the event connector to reach the configured host and port. TLS termination and network policy are deployment responsibilities.
 
-The endpoint accepts `renamed`, `edited`, `deleted`, and the CloudEvents envelope `ENVLOG.GitHub.custom_property_values.updated` (`data/fixtures/github_parsed_updated.json`). That updated envelope is the GitHub import. It rejects `created` and ADO payloads.
+The endpoint accepts `renamed`, `edited`, `deleted`, and the parsed updated body in `data/fixtures/github_parsed_updated.json`. That body has top-level `repository` and `newPropertyValues` and is the GitHub import. It rejects `created` and ADO payloads.
 
 On `kafka`, `worker run` starts the HTTP listener and the Storage Queue follow-up consumer. It does not open Service Bus. The worker sends `import_poll` and `lifecycle_deferred` follow-ups to `storageQueue.queueName` in the same storage account as `syncState.storageAccountEndpoint`. It derives `https://{account}.queue.{suffix}` from the table URL and does not accept a second account. Provision the queue and poison queue. The worker does not create them, and it never copies inbound GitHub bodies to the Storage Queue.
 
@@ -140,7 +140,7 @@ The integration type for API lookup is determined by the section key (for exampl
 
 When using `defaultSnykOrgId` without an explicit scope entry, the worker uses `azure-repos` for ADO events. For GitHub events it uses `github` unless exactly one GitHub integration type section is configured, in which case that type is used.
 
-**Property extractors:** `collectionPath` is a dotted object path from the received JSON root to an array of objects. The worker keeps elements whose `matchField` equals `matchValue` and reads `valueField`. For the GitHub updated fixture the path is `data.newPropertyValues`, `matchField` is `property_name`, `matchValue` is `azure-devops-project`, and `valueField` is `value`. The same four fields work for `azure-repos` when an operator supplies a path. A non-empty extracted value is the lookup key and does not fall through to `orgName` or `projectName`. A missing path, or a null or blank value, uses the name mapping.
+**Property extractors:** `collectionPath` is a dotted object path from the received JSON root to an array of objects. The worker keeps elements whose `matchField` equals `matchValue` and reads `valueField`. For the GitHub updated fixture the path is `newPropertyValues`, `matchField` is `property_name`, `matchValue` is `azure-devops-project`, and `valueField` is `value`. The same four fields work for `azure-repos` when an operator supplies a path. A non-empty extracted value is the lookup key and does not fall through to `orgName` or `projectName`. A missing path, or a null or blank value, uses the name mapping.
 
 **Lookup keys:** When no property value is extracted, ADO events use `ado.projectName` from the normalized audit record and GitHub events use `repository.owner.login`. `scopeId` stays the ADO project id or GitHub org login. Importing a GitHub repository does not deactivate an existing Azure DevOps Snyk target; that retirement is a later change.
 
@@ -404,7 +404,7 @@ See `data/fixtures/eventgrid_ado_*.json` and **[INGESTION.md](INGESTION.md)**.
 
 ### GitHub (raw webhook, parsed contract, or parsed updated)
 
-Raw webhook JSON has top-level `action` and `repository`. Parsed GitHubHooks events include `deliveryId` and camelCase repository fields. The parsed updated envelope is `type: ENVLOG.GitHub.custom_property_values.updated` with camelCase `data.repository` and `data.newPropertyValues`. That envelope normalizes to `repo.created` and is the GitHub import. See `data/fixtures/github_webhook_*.json`, `data/fixtures/github_parsed_*.json`, and `data/fixtures/github_parsed_updated.json`.
+Raw webhook JSON has top-level `action` and `repository`. Parsed GitHubHooks events include `deliveryId` and camelCase repository fields. The parsed updated body has top-level `deliveryId`, camelCase `repository`, and `newPropertyValues`. That body normalizes to `repo.created` and is the GitHub import. See `data/fixtures/github_webhook_*.json`, `data/fixtures/github_parsed_*.json`, and `data/fixtures/github_parsed_updated.json`.
 
 See `openspec/specs/event-ingestion/spec.md` for the canonical contract. Step-by-step ingress setup (Service Bus, ADO audit stream, GitHub webhooks): **[INGESTION.md](INGESTION.md)**.
 
@@ -414,7 +414,7 @@ After parsing, the worker maps supported ADO audit records into a normalized lif
 
 ## Normalized lifecycle event (GitHub)
 
-GitHub uses the same four `eventType` values. `scopeId` and `github.orgLogin` are the organization login (`repository.owner.login`, or `data.repository.owner.login` on the updated envelope). `eventId` is `deliveryId` on parsed contract messages and `data.deliveryId` on the updated envelope. `occurredAt` for the updated envelope is the CloudEvents `time` when present. `edited` maps to default-branch change only when `changes.default_branch.from` is present. `ENVLOG.GitHub.custom_property_values.updated` maps to `repo.created`.
+GitHub uses the same four `eventType` values. `scopeId` and `github.orgLogin` are the organization login (`repository.owner.login`). `eventId` is `deliveryId` on parsed contract and parsed updated messages. `occurredAt` for the parsed updated body is `repository.updatedAt`. `edited` maps to default-branch change only when `changes.default_branch.from` is present. The parsed updated body maps to `repo.created`.
 
 
 | Field                           | ADO audit source             | Description                                                                          |

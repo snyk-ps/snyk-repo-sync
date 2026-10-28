@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from worker.followup import InternalFollowUpMessage, parse_internal_follow_up
-from worker.normalize import GITHUB_UPDATED_TYPE
+from worker.normalize import is_github_parsed_updated_body
 
 ADO_AUDIT_EVENT_TYPE = "AzureDevOpsAuditEvent"
 ADO_AUDIT_SUBJECT = "AzureDevOps/Auditing"
@@ -45,7 +45,7 @@ def _is_ado_message(data: dict[str, Any]) -> bool:
 
 
 def _is_github_updated_message(data: dict[str, Any]) -> bool:
-    return data.get("type") == GITHUB_UPDATED_TYPE and isinstance(data.get("data"), dict)
+    return is_github_parsed_updated_body(data)
 
 
 def _is_github_message(data: dict[str, Any]) -> bool:
@@ -77,7 +77,8 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
     """Parse a native queue message body and infer provider source.
 
     ADO messages are Event Grid JSON identified by ``eventType`` or ``subject``.
-    GitHub messages are raw webhook JSON with ``repository`` and ``action``.
+    GitHub parsed updated messages have ``repository`` and ``newPropertyValues``
+    and no ``action``. Other GitHub messages have ``repository`` and ``action``.
 
     Args:
         body: Raw queue message body.
@@ -107,8 +108,7 @@ def parse_queue_message(body: str | bytes) -> QueueMessage:
         )
 
     if _is_github_updated_message(data):
-        inner = data["data"]
-        delivery_id = inner.get("deliveryId") if isinstance(inner, dict) else None
+        delivery_id = data.get("deliveryId")
         event_id = delivery_id.strip() if isinstance(delivery_id, str) and delivery_id.strip() else None
         return QueueMessage(
             source="github",
