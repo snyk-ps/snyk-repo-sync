@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass, field
+from typing import Any
 
 from ado.client import AdoClient
 from config.ignored_repos import IgnoreMatch, is_ignored
 from config.scope_mapping import (
+    AmbiguousOrgNameMatch,
+    IntegrationSettings,
     ResolvedScopeMapping,
     ScopeMappingSettings,
     ScopeSource,
@@ -49,6 +52,83 @@ from worker.target_resolve import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def log_scope_resolution(
+    resolution: ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch,
+    *,
+    source: str,
+    lookup_key: str,
+    event_id: str,
+    scope_id: str,
+    repository_id: str,
+    extracted_value: str | None = None,
+) -> None:
+    """Log a scope resolution outcome without secrets."""
+    extracted = f" extracted_value={extracted_value}" if extracted_value else ""
+    if isinstance(resolution, AmbiguousOrgNameMatch):
+        logger.warning(
+            "scope_mapping_org_name_ambiguous source=%s candidate=%s matched_org_name=%s "
+            "event_id=%s scope_id=%s repository_id=%s%s",
+            resolution.source,
+            resolution.candidate,
+            ", ".join(resolution.matched_org_names),
+            event_id,
+            scope_id,
+            repository_id,
+            extracted,
+        )
+        return
+    if isinstance(resolution, UnmappedScope):
+        logger.warning(
+            "scope_mapping_unmapped source=%s lookup_key=%s event_id=%s "
+            "scope_id=%s repository_id=%s%s",
+            resolution.source,
+            lookup_key,
+            event_id,
+            scope_id,
+            repository_id,
+            extracted,
+        )
+        return
+    if resolution.resolution == "org_name":
+        logger.info(
+            "scope_mapping_org_name source=%s candidate=%s matched_org_name=%s "
+            "snyk_org_id=%s event_id=%s scope_id=%s repository_id=%s%s",
+            source,
+            resolution.candidate or lookup_key,
+            resolution.matched_org_name or "",
+            resolution.snyk_org_id,
+            event_id,
+            scope_id,
+            repository_id,
+            extracted,
+        )
+        return
+    if resolution.resolution == "default":
+        logger.warning(
+            "scope_mapping_default source=%s lookup_key=%s event_id=%s "
+            "scope_id=%s repository_id=%s snyk_org_id=%s%s",
+            source,
+            lookup_key,
+            event_id,
+            scope_id,
+            repository_id,
+            resolution.snyk_org_id,
+            extracted,
+        )
+        return
+    logger.info(
+        "Resolved scope mapping source=%s resolution=%s snyk_org_id=%s "
+        "event_id=%s scope_id=%s lookup_key=%s%s",
+        source,
+        resolution.resolution,
+        resolution.snyk_org_id,
+        event_id,
+        scope_id,
+        lookup_key,
+        extracted,
+    )
 
 
 @dataclass(frozen=True)
@@ -98,7 +178,7 @@ def _repository_lock(
 
 def process_normalized_event(
     event: NormalizedEvent,
-    resolution: ResolvedScopeMapping | UnmappedScope,
+    resolution: ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch,
     *,
     deps: WorkerSyncDependencies,
 ) -> LifecycleOutcome:
@@ -114,10 +194,12 @@ def process_normalized_event(
 
 def _process_normalized_event(
     event: NormalizedEvent,
-    resolution: ResolvedScopeMapping | UnmappedScope,
+    resolution: ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch,
     *,
     deps: WorkerSyncDependencies,
 ) -> LifecycleOutcome:
+    if isinstance(resolution, AmbiguousOrgNameMatch):
+        return LifecycleOutcome(skip_reason="ambiguous_org_name")
     if isinstance(resolution, UnmappedScope):
         extracted = (
             f" extracted_value={event.scope_property_value}"
@@ -298,12 +380,31 @@ def _process_import_poll(
     extracted_property_value: str | None = None,
 ) -> LifecycleOutcome:
     scope_source: ScopeSource = "github" if source == "github" else "ado"
+    existing = deps.sync_state.get_repository(
+        source=source,
+        scope_id=scope_id,
+        repository_id=repository_id,
+    )
     resolution = resolve_scope_mapping(
         deps.scope_mapping,
         source=scope_source,
         lookup_key=scope_lookup_key,
         extracted_value=extracted_property_value,
+        stored_org_id=existing.snyk_org_id if existing is not None else None,
+        stored_integration_type=existing.snyk_integration_type if existing is not None else None,
+        group_org_loader=deps.snyk.list_group_orgs,
     )
+    log_scope_resolution(
+        resolution,
+        source=source,
+        lookup_key=scope_lookup_key,
+        event_id=source_event_id,
+        scope_id=scope_id,
+        repository_id=repository_id,
+        extracted_value=extracted_property_value,
+    )
+    if isinstance(resolution, AmbiguousOrgNameMatch):
+        return LifecycleOutcome(skip_reason="ambiguous_org_name")
     if isinstance(resolution, UnmappedScope):
         return LifecycleOutcome(
             settlement="dead_letter",
@@ -316,6 +417,7 @@ def _process_import_poll(
         org_id=resolution.snyk_org_id,
         deps=deps,
         extracted_value=extracted_property_value,
+        resolution=resolution,
     )
     snyk_org_id = resolution.snyk_org_id
     if retry_count >= MAX_IMPORT_POLL_RETRIES:
@@ -330,13 +432,10 @@ def _process_import_poll(
         )
         deps.sync_state.upsert_repository(
             _failed_state_from_existing(
-                deps.sync_state.get_repository(
-                    source=source,
-                    scope_id=scope_id,
-                    repository_id=repository_id,
-                ),
+                existing,
                 import_job_id=import_job_id,
                 source_event_id=source_event_id,
+                resolution=resolution,
             ),
             source=source,
             scope_id=scope_id,
@@ -414,13 +513,10 @@ def _process_import_poll(
         )
         deps.sync_state.upsert_repository(
             _failed_state_from_existing(
-                deps.sync_state.get_repository(
-                    source=source,
-                    scope_id=scope_id,
-                    repository_id=repository_id,
-                ),
+                existing,
                 import_job_id=import_job_id,
                 source_event_id=source_event_id,
+                resolution=resolution,
             ),
             source=source,
             scope_id=scope_id,
@@ -442,11 +538,6 @@ def _process_import_poll(
         )
         return LifecycleOutcome(scheduled_followups=(followup,))
 
-    existing = deps.sync_state.get_repository(
-        source=source,
-        scope_id=scope_id,
-        repository_id=repository_id,
-    )
     if existing is None:
         return LifecycleOutcome(
             settlement="dead_letter",
@@ -459,6 +550,7 @@ def _process_import_poll(
         scope_lookup_key,
         deps,
         extracted_value=extracted_property_value,
+        resolution=resolution,
     )
     lookup = TargetLookup(
         owner=scope_lookup_key,
@@ -498,7 +590,8 @@ def _process_import_poll(
         )
         return LifecycleOutcome(scheduled_followups=(followup,))
 
-    final_state = RepositoryState(
+    final_state = _repository_state(
+        resolution,
         repo_name=existing.repo_name,
         snyk_target_id=target_id,
         default_branch=existing.default_branch,
@@ -535,12 +628,31 @@ def process_lifecycle_deferred(
 ) -> LifecycleOutcome:
     """Retry deferred lifecycle work when pending import capacity is available."""
     event = _event_from_deferred_message(message)
+    state = deps.sync_state.get_repository(
+        source=event.source,
+        scope_id=event.scope_id,
+        repository_id=event.repository_id,
+    )
     resolution = resolve_scope_mapping(
         deps.scope_mapping,
         source=event.source,
         lookup_key=scope_lookup_key(event),
         extracted_value=event.scope_property_value,
+        stored_org_id=state.snyk_org_id if state is not None else None,
+        stored_integration_type=state.snyk_integration_type if state is not None else None,
+        group_org_loader=deps.snyk.list_group_orgs,
     )
+    log_scope_resolution(
+        resolution,
+        source=event.source,
+        lookup_key=scope_lookup_key(event),
+        event_id=event.event_id,
+        scope_id=event.scope_id,
+        repository_id=event.repository_id,
+        extracted_value=event.scope_property_value,
+    )
+    if isinstance(resolution, AmbiguousOrgNameMatch):
+        return LifecycleOutcome(skip_reason="ambiguous_org_name")
     if isinstance(resolution, UnmappedScope):
         return LifecycleOutcome(skip_reason="unmapped_scope")
     return process_normalized_event(event, resolution, deps=deps)
@@ -589,6 +701,7 @@ def _handle_ignored_event(
         scope_lookup_key(event),
         deps,
         extracted_value=event.scope_property_value,
+        resolution=resolution,
     )
     target_id = ensure_snyk_target_id(
         resolution.snyk_org_id,
@@ -626,7 +739,8 @@ def _handle_ignored_event(
     if state is None:
         return LifecycleOutcome(skip_reason="ignored")
 
-    inactive_state = RepositoryState(
+    inactive_state = _repository_state(
+        resolution,
         repo_name=event.repository.name,
         snyk_target_id="" if mode == "delete" else (target_id or state.snyk_target_id),
         default_branch=state.default_branch or default_branch_for_event(event),
@@ -667,6 +781,7 @@ def _handle_repo_deleted(
         scope_lookup_key(event),
         deps,
         extracted_value=event.scope_property_value,
+        resolution=resolution,
     )
     target_id = ensure_snyk_target_id(
         resolution.snyk_org_id,
@@ -712,7 +827,8 @@ def _handle_repo_deleted(
             dead_letter_description="Snyk target removal failed for deleted repository",
         )
 
-    inactive_state = RepositoryState(
+    inactive_state = _repository_state(
+        resolution,
         repo_name=event.repository.name,
         snyk_target_id="" if mode == "delete" else (target_id or ""),
         default_branch=state.default_branch if state else default_branch_for_event(event),
@@ -800,7 +916,8 @@ def _start_import(
             )
             raise
 
-    pending_state = RepositoryState(
+    pending_state = _repository_state(
+        resolution,
         repo_name=event.repository.name,
         snyk_target_id="",
         default_branch=import_branch,
@@ -856,6 +973,7 @@ def _remove_existing_target_before_reimport(
         scope_lookup_key(event),
         deps,
         extracted_value=event.scope_property_value,
+        resolution=resolution,
     )
     target_id = ensure_snyk_target_id(
         resolution.snyk_org_id,
@@ -926,6 +1044,28 @@ def _resolve_integration_id(
         org_id=resolution.snyk_org_id,
         deps=deps,
         extracted_value=event.scope_property_value,
+        resolution=resolution,
+    )
+
+
+def _integration_settings_for_resolution(
+    resolution: ResolvedScopeMapping,
+    deps: WorkerSyncDependencies,
+    *,
+    source: ScopeSource,
+    lookup_key: str,
+    extracted_value: str | None,
+) -> IntegrationSettings:
+    if resolution.integration_type is not None:
+        return IntegrationSettings(
+            integration_type=resolution.integration_type,
+            integration_id=resolution.integration_id,
+        )
+    return resolve_integration_settings(
+        deps.scope_mapping,
+        source=source,
+        lookup_key=lookup_key,
+        extracted_value=extracted_value,
     )
 
 
@@ -936,13 +1076,23 @@ def _resolve_integration_id_for_scope(
     org_id: str,
     deps: WorkerSyncDependencies,
     extracted_value: str | None = None,
+    resolution: ResolvedScopeMapping | None = None,
 ) -> str:
-    integration_settings = resolve_integration_settings(
-        deps.scope_mapping,
-        source=source,
-        lookup_key=lookup_key,
-        extracted_value=extracted_value,
-    )
+    if resolution is None:
+        integration_settings = resolve_integration_settings(
+            deps.scope_mapping,
+            source=source,
+            lookup_key=lookup_key,
+            extracted_value=extracted_value,
+        )
+    else:
+        integration_settings = _integration_settings_for_resolution(
+            resolution,
+            deps,
+            source=source,
+            lookup_key=lookup_key,
+            extracted_value=extracted_value,
+        )
     return deps.integration_resolver.resolve(
         org_id=org_id,
         integration_type=integration_settings.integration_type,
@@ -956,14 +1106,25 @@ def _snyk_source_type(
     deps: WorkerSyncDependencies,
     *,
     extracted_value: str | None = None,
+    resolution: ResolvedScopeMapping | None = None,
 ) -> str:
     """Return Snyk REST ``source_types`` filter for target lookup."""
+    if resolution is not None and resolution.integration_type is not None:
+        return resolution.integration_type
     return resolve_integration_settings(
         deps.scope_mapping,
         source=source,
         lookup_key=lookup_key,
         extracted_value=extracted_value,
     ).integration_type
+
+
+def _repository_state(resolution: ResolvedScopeMapping, **kwargs: Any) -> RepositoryState:
+    """Build repository state and persist a successful scope resolution."""
+    if resolution.integration_type is not None:
+        kwargs["snyk_org_id"] = resolution.snyk_org_id
+        kwargs["snyk_integration_type"] = resolution.integration_type
+    return RepositoryState(**kwargs)
 
 
 def _schedule_import_poll(
@@ -1005,9 +1166,10 @@ def _failed_state_from_existing(
     *,
     import_job_id: str,
     source_event_id: str,
+    resolution: ResolvedScopeMapping | None = None,
 ) -> RepositoryState:
     if existing is None:
-        return RepositoryState(
+        state = RepositoryState(
             repo_name="",
             snyk_target_id="",
             default_branch="",
@@ -1018,17 +1180,33 @@ def _failed_state_from_existing(
             import_job_id=import_job_id,
             import_status="failed",
         )
-    return RepositoryState(
-        repo_name=existing.repo_name,
-        snyk_target_id=existing.snyk_target_id,
-        default_branch=existing.default_branch,
-        status=existing.status,
-        desired_state_hash=existing.desired_state_hash,
-        last_event_id=source_event_id,
-        tag_applied=False,
-        import_job_id=import_job_id,
-        import_status="failed",
-        owner_name=existing.owner_name,
+    else:
+        state = RepositoryState(
+            repo_name=existing.repo_name,
+            snyk_target_id=existing.snyk_target_id,
+            default_branch=existing.default_branch,
+            status=existing.status,
+            desired_state_hash=existing.desired_state_hash,
+            last_event_id=source_event_id,
+            tag_applied=False,
+            import_job_id=import_job_id,
+            import_status="failed",
+            owner_name=existing.owner_name,
+        )
+    if resolution is None:
+        return state
+    return _repository_state(
+        resolution,
+        repo_name=state.repo_name,
+        snyk_target_id=state.snyk_target_id,
+        default_branch=state.default_branch,
+        status=state.status,
+        desired_state_hash=state.desired_state_hash,
+        last_event_id=state.last_event_id,
+        tag_applied=state.tag_applied,
+        import_job_id=state.import_job_id,
+        import_status=state.import_status,
+        owner_name=state.owner_name,
     )
 
 

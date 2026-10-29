@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -21,6 +22,7 @@ from snyk.target_lookup import (
 ImportJobState = Literal["pending", "complete", "failed"]
 REST_API_VERSION = "2024-10-15"
 DEFAULT_SOURCE_TYPE = "azure-repos"
+GROUP_ORG_CACHE_TTL_SECONDS = 15 * 60
 
 
 class HttpResponse(Protocol):
@@ -59,6 +61,14 @@ class SnykIntegration:
 
 
 @dataclass(frozen=True)
+class SnykGroupOrg:
+    """Organization id and name from a Snyk group."""
+
+    id: str
+    name: str
+
+
+@dataclass(frozen=True)
 class ImportTarget:
     """Repository target passed to the Snyk import API."""
 
@@ -87,11 +97,15 @@ class SnykClient:
         base_url: str = "https://api.snyk.io",
         opener: HttpOpener | None = None,
         max_rate_limit_retries: int = 3,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._token = token
         self._base_url = base_url.rstrip("/")
         self._opener = opener or urllib.request.urlopen
         self._max_rate_limit_retries = max_rate_limit_retries
+        self._clock = clock or time.monotonic
+        self._group_orgs: dict[str, tuple[float, list[SnykGroupOrg]]] = {}
+        self._group_org_lock = threading.Lock()
 
     def list_integrations(self, org_id: str) -> list[SnykIntegration]:
         """List integrations configured for a Snyk organization."""
@@ -99,6 +113,24 @@ class SnykClient:
         if not isinstance(payload, dict):
             raise SnykApiError("integrations response must be a JSON object")
         return _parse_integrations_payload(payload)
+
+    def list_group_orgs(self, group_id: str) -> list[SnykGroupOrg]:
+        """Return organizations in a Snyk group.
+
+        The list is cached in process memory and refreshed when it is older
+        than 15 minutes. Entries that omit ``id`` or ``name`` are skipped.
+        """
+        now = self._clock()
+        with self._group_org_lock:
+            cached = self._group_orgs.get(group_id)
+            if cached is not None and now - cached[0] <= GROUP_ORG_CACHE_TTL_SECONDS:
+                return list(cached[1])
+        payload = self._request_json("GET", f"/v1/group/{group_id}/orgs")
+        orgs = _parse_group_orgs(payload, group_id=group_id)
+        fetched_at = self._clock()
+        with self._group_org_lock:
+            self._group_orgs[group_id] = (fetched_at, orgs)
+        return list(orgs)
 
     def start_import(
         self,
@@ -405,6 +437,28 @@ class SnykClient:
             raise SnykApiError(
                 f"Snyk API {method} {url} returned invalid JSON",
             ) from exc
+
+
+def _parse_group_orgs(payload: object, *, group_id: str) -> list[SnykGroupOrg]:
+    """Parse ``GET /v1/group/{groupId}/orgs`` and skip incomplete entries."""
+    label = f"Snyk API GET /v1/group/{group_id}/orgs"
+    if not isinstance(payload, dict):
+        raise SnykApiError(f"{label} response must be a JSON object")
+    orgs = payload.get("orgs")
+    if not isinstance(orgs, list):
+        raise SnykApiError(f"{label} response must include an orgs array")
+    parsed: list[SnykGroupOrg] = []
+    for item in orgs:
+        if not isinstance(item, dict):
+            continue
+        org_id = item.get("id")
+        name = item.get("name")
+        if not isinstance(org_id, str) or not org_id.strip():
+            continue
+        if not isinstance(name, str) or not name.strip():
+            continue
+        parsed.append(SnykGroupOrg(id=org_id.strip(), name=name.strip()))
+    return parsed
 
 
 def _parse_integrations_payload(payload: dict[str, Any]) -> list[SnykIntegration]:

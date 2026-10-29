@@ -3,7 +3,7 @@
 Azure Table Storage schema and access patterns for per-repository sync state (idempotency, target tracking, and lifecycle bookkeeping). Scope-to-Snyk mapping is owned by the `scope-mapping` capability and operator config — not Table Storage.
 ## Requirements
 ### Requirement: Table name and keys
-Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `PartitionKey = {source}:{scopeId}` where `source` is `ado` or `github`, and `RowKey = {repositoryId}`. Scope configuration MUST NOT be stored in Table Storage; scope mapping is owned by the `scope-mapping` capability.
+Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `PartitionKey = {source}:{scopeId}` where `source` is `ado` or `github`, and `RowKey = {repositoryId}`. Operator scope-mapping rules MUST NOT be stored in Table Storage. A repository row MAY store the resolved `snykOrgId` and `snykIntegrationType` for that repository. Scope mapping rules remain owned by the `scope-mapping` capability.
 
 #### Scenario: ADO repository partition
 - **WHEN** repository state is stored for an ADO project
@@ -15,6 +15,8 @@ Sync state MUST be stored in Azure Table Storage table `SnykSyncState` with `Par
 
 ### Requirement: Repository state schema
 Each repository row MUST store: `repoName`, `snykTargetId`, `defaultBranch`, `status`, `desiredStateHash`, `lastEventId`, `tagApplied`, `importJobId`, and `importStatus`.
+
+Each repository row MAY store `snykOrgId` and `snykIntegrationType` as strings. A missing or blank `snykOrgId` MUST be treated as no stored Snyk org. When `snykOrgId` is non-empty, `snykIntegrationType` MUST be one of `azure-repos`, `github`, `github-cloud-app`, `github-server-app`, or `github-enterprise`.
 
 `importStatus` MUST be one of: `pending`, `failed`, `complete`.
 
@@ -37,6 +39,14 @@ After successful import, `importJobId` MUST be retained on the repository row fo
 #### Scenario: Import failed
 - **WHEN** import job fails
 - **THEN** the row is upserted with `importStatus=failed` and the current `importJobId`
+
+#### Scenario: Resolved org id round-trip
+- **WHEN** a repository row is written with `snykOrgId` and `snykIntegrationType` and then read back
+- **THEN** both properties are present as strings
+
+#### Scenario: Row without a stored org id
+- **WHEN** a repository row has no `snykOrgId` property
+- **THEN** readers treat the stored Snyk org as absent
 
 ### Requirement: Ignore list persistence
 When the ignore-policy file is successfully loaded, its parsed contents MUST be persisted in sync state for use by the worker and background reconciliation loop.

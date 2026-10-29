@@ -370,6 +370,62 @@ def test_github_server_app_import_poll_filters_target_lookup() -> None:
     )
 
 
+def test_import_poll_uses_stored_org_when_static_mapping_misses() -> None:
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="",
+        default_branch="main",
+        status="pending",
+        desired_state_hash="hash",
+        last_event_id="evt-1",
+        tag_applied=False,
+        import_job_id="job-1",
+        import_status="pending",
+        snyk_org_id="stored-org",
+        snyk_integration_type="github-enterprise",
+    )
+    snyk = MagicMock()
+    snyk.get_import_job.return_value = ImportJobStatus(
+        job_id="job-1",
+        state="complete",
+        target_id="",
+    )
+    snyk.find_target_id.return_value = "target-1"
+    deps = replace(
+        _deps(sync_state=sync_state, snyk=snyk),
+        scope_mapping=ScopeMappingSettings(
+            default_snyk_org_id="default-org",
+            ado_by_project_name={},
+            github_by_org_name={},
+            configured_github_integration_types=frozenset({"github"}),
+        ),
+    )
+    deps.integration_resolver.resolve.return_value = "integration-stored"
+
+    process_import_poll(
+        source="github",
+        scope_id="contoso",
+        repository_id="repo",
+        source_event_id="evt-1",
+        import_job_id="job-1",
+        retry_count=0,
+        scope_lookup_key="contoso",
+        deps=deps,
+    )
+
+    snyk.get_import_job.assert_called_once_with("stored-org", "integration-stored", "job-1")
+    deps.integration_resolver.resolve.assert_called_once_with(
+        org_id="stored-org",
+        integration_type="github-enterprise",
+        configured_integration_id=None,
+    )
+    snyk.list_group_orgs.assert_not_called()
+    saved = sync_state.upsert_repository.call_args.args[0]
+    assert saved.snyk_org_id == "stored-org"
+    assert saved.snyk_integration_type == "github-enterprise"
+
+
 def test_repo_deleted_marks_inactive() -> None:
     sync_state = MagicMock()
     sync_state.get_repository.return_value = RepositoryState(

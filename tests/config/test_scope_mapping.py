@@ -5,6 +5,7 @@ import pytest
 from config.errors import ConfigError
 from config.scope_mapping import (
     AdoScopeEntry,
+    AmbiguousOrgNameMatch,
     GitHubScopeEntry,
     PropertyExtractionError,
     ResolvedScopeMapping,
@@ -15,6 +16,7 @@ from config.scope_mapping import (
     resolve_integration_settings,
     resolve_scope_mapping,
 )
+from snyk.client import SnykApiError, SnykGroupOrg
 
 
 def test_parse_scope_mapping_empty() -> None:
@@ -129,6 +131,7 @@ def test_resolve_scope_mapping_ado_mapped() -> None:
     assert result == ResolvedScopeMapping(
         snyk_org_id="mapped-org",
         resolution="mapped",
+        integration_type="azure-repos",
     )
 
 
@@ -151,6 +154,7 @@ def test_resolve_scope_mapping_github_mapped() -> None:
     assert result == ResolvedScopeMapping(
         snyk_org_id="github-org",
         resolution="mapped",
+        integration_type="github-enterprise",
     )
 
 
@@ -167,6 +171,7 @@ def test_resolve_scope_mapping_default_fallback() -> None:
     assert result == ResolvedScopeMapping(
         snyk_org_id="default-org",
         resolution="default",
+        integration_type="azure-repos",
     )
 
 
@@ -385,7 +390,11 @@ def test_extract_github_property_and_resolve_without_org_fallback() -> None:
     )
 
     assert extracted == "sample-project"
-    assert resolved == ResolvedScopeMapping(snyk_org_id="org-by-property", resolution="mapped")
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="org-by-property",
+        resolution="mapped",
+        integration_type="github-cloud-app",
+    )
     settings = resolve_integration_settings(
         mapping,
         source="github",
@@ -412,7 +421,11 @@ def test_missing_property_path_uses_org_name() -> None:
     )
 
     assert extracted is None
-    assert resolved == ResolvedScopeMapping(snyk_org_id="org-by-name", resolution="mapped")
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="org-by-name",
+        resolution="mapped",
+        integration_type="github",
+    )
 
 
 def test_unlisted_extracted_value_skips_org_name_for_default() -> None:
@@ -442,7 +455,11 @@ def test_unlisted_extracted_value_skips_org_name_for_default() -> None:
         extracted_value=extracted,
     )
 
-    assert resolved == ResolvedScopeMapping(snyk_org_id="default-org", resolution="default")
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="default-org",
+        resolution="default",
+        integration_type="github",
+    )
 
 
 def test_unlisted_extracted_value_without_default_is_unmapped() -> None:
@@ -488,7 +505,11 @@ def test_extract_ado_property_from_synthetic_payload() -> None:
     )
 
     assert extracted == "platform"
-    assert resolved == ResolvedScopeMapping(snyk_org_id="ado-org", resolution="mapped")
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="ado-org",
+        resolution="mapped",
+        integration_type="azure-repos",
+    )
 
 
 def test_extract_blank_property_value_is_absent() -> None:
@@ -533,4 +554,367 @@ def test_extract_wrong_json_type() -> None:
             mapping,
             source="github",
             payload={"data": {"newPropertyValues": {"property_name": "azure-devops-project"}}},
+        )
+
+
+class _OrgLoader:
+    """Records group org list calls for resolution tests."""
+
+    def __init__(
+        self,
+        orgs: list[SnykGroupOrg] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self.orgs = orgs or []
+        self.error = error
+        self.calls: list[str] = []
+
+    def __call__(self, group_id: str) -> list[SnykGroupOrg]:
+        self.calls.append(group_id)
+        if self.error is not None:
+            raise self.error
+        return self.orgs
+
+
+def test_parse_list_section_leaves_org_name_match_off() -> None:
+    settings = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "azure-repos": [{"projectName": "proj", "snykOrgId": "org"}],
+        },
+    )
+
+    assert settings.snyk_group_id == "group-1"
+    assert settings.ado_org_name_match is None
+    assert settings.github_org_name_match is None
+    assert settings.configured_github_integration_types == frozenset()
+
+
+def test_parse_object_section_reads_entries_and_name_match() -> None:
+    settings = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "github-enterprise": {
+                "entries": [{"orgName": "contoso", "snykOrgId": "org-1"}],
+                "matchSnykOrgName": {"enabled": True, "normalize": False},
+            },
+        },
+    )
+
+    assert settings.github_by_org_name["contoso"].snyk_org_id == "org-1"
+    assert settings.github_org_name_match is not None
+    assert settings.github_org_name_match.enabled is True
+    assert settings.github_org_name_match.normalize is False
+    assert settings.github_org_name_match.integration_type == "github-enterprise"
+    assert settings.configured_github_integration_types == frozenset({"github-enterprise"})
+
+
+def test_parse_empty_object_section_counts_as_configured_github_type() -> None:
+    settings = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "github-enterprise": {
+                "matchSnykOrgName": {"enabled": True, "normalize": True},
+            },
+        },
+    )
+
+    assert settings.github_by_org_name == {}
+    assert settings.configured_github_integration_types == frozenset({"github-enterprise"})
+    defaulted = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "defaultSnykOrgId": "default-org",
+            "github-enterprise": {
+                "entries": [],
+                "matchSnykOrgName": {"enabled": False, "normalize": False},
+            },
+        },
+    )
+    resolved = resolve_scope_mapping(defaulted, source="github", lookup_key="missing")
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="default-org",
+        resolution="default",
+        integration_type="github-enterprise",
+    )
+
+
+def test_parse_object_entries_keep_duplicate_rules() -> None:
+    with pytest.raises(ConfigError, match="Duplicate scopeMapping.azure-repos projectName"):
+        parse_scope_mapping(
+            {
+                "azure-repos": {
+                    "entries": [
+                        {"projectName": "dup", "snykOrgId": "org-1"},
+                        {"projectName": "dup", "snykOrgId": "org-2"},
+                    ],
+                },
+            },
+        )
+
+
+def test_parse_match_requires_boolean_enabled() -> None:
+    with pytest.raises(ConfigError, match="matchSnykOrgName.enabled must be a boolean"):
+        parse_scope_mapping(
+            {
+                "github": {
+                    "matchSnykOrgName": {"normalize": True},
+                },
+            },
+        )
+
+
+def test_parse_enabled_name_match_requires_group_id() -> None:
+    with pytest.raises(ConfigError, match="scopeMapping.snykGroupId must be a non-empty string"):
+        parse_scope_mapping(
+            {
+                "azure-repos": {
+                    "matchSnykOrgName": {"enabled": True, "normalize": False},
+                },
+            },
+        )
+
+
+def test_parse_rejects_two_enabled_github_sections() -> None:
+    with pytest.raises(ConfigError, match="only one GitHub section"):
+        parse_scope_mapping(
+            {
+                "snykGroupId": "group-1",
+                "github": {
+                    "matchSnykOrgName": {"enabled": True, "normalize": False},
+                },
+                "github-enterprise": {
+                    "matchSnykOrgName": {"enabled": True, "normalize": True},
+                },
+            },
+        )
+
+
+def test_parse_snyk_group_id_is_not_an_integration_type() -> None:
+    settings = parse_scope_mapping({"snykGroupId": "group-1"})
+
+    assert settings.snyk_group_id == "group-1"
+    assert settings.configured_github_integration_types == frozenset()
+    assert settings.ado_by_project_name == {}
+
+
+def test_static_row_wins_without_calling_group_api() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "github-enterprise": {
+                "entries": [{"propertyValue": "sample-project", "snykOrgId": "static-org"}],
+                "matchSnykOrgName": {"enabled": True, "normalize": False},
+            },
+            "propertyExtractors": {"github": _github_extractor()},
+        },
+    )
+    loader = _OrgLoader([SnykGroupOrg(id="name-org", name="sample-project")])
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value="sample-project",
+        group_org_loader=loader,
+    )
+
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="static-org",
+        resolution="mapped",
+        integration_type="github-enterprise",
+    )
+    assert loader.calls == []
+
+
+def test_disabled_name_match_does_not_call_group_api() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "defaultSnykOrgId": "default-org",
+            "github": {
+                "matchSnykOrgName": {"enabled": False, "normalize": True},
+            },
+        },
+    )
+    loader = _OrgLoader([SnykGroupOrg(id="name-org", name="Platform")])
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="Platform",
+        group_org_loader=loader,
+    )
+
+    assert isinstance(resolved, ResolvedScopeMapping)
+    assert resolved.resolution == "default"
+    assert resolved.snyk_org_id == "default-org"
+    assert loader.calls == []
+
+
+def test_exact_org_name_match_uses_enabling_section() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "github-enterprise": {
+                "matchSnykOrgName": {"enabled": True, "normalize": False},
+            },
+        },
+    )
+    loader = _OrgLoader([SnykGroupOrg(id="org-platform", name="Platform")])
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="Platform",
+        group_org_loader=loader,
+    )
+
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="org-platform",
+        resolution="org_name",
+        integration_type="github-enterprise",
+        matched_org_name="Platform",
+        candidate="Platform",
+    )
+    assert loader.calls == ["group-1"]
+
+
+def test_org_name_match_uses_extracted_value_not_org_login() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "propertyExtractors": {"github": _github_extractor()},
+            "github-enterprise": {
+                "entries": [{"orgName": "sample-org", "snykOrgId": "org-by-name"}],
+                "matchSnykOrgName": {"enabled": True, "normalize": False},
+            },
+        },
+    )
+    loader = _OrgLoader(
+        [
+            SnykGroupOrg(id="login-org", name="sample-org"),
+            SnykGroupOrg(id="property-org", name="other-project"),
+        ],
+    )
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="sample-org",
+        extracted_value="other-project",
+        group_org_loader=loader,
+    )
+
+    assert isinstance(resolved, ResolvedScopeMapping)
+    assert resolved.snyk_org_id == "property-org"
+    assert resolved.resolution == "org_name"
+    assert resolved.candidate == "other-project"
+
+
+def test_stored_org_is_used_after_name_match_miss() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "defaultSnykOrgId": "default-org",
+            "github-enterprise": {
+                "matchSnykOrgName": {"enabled": True, "normalize": True},
+            },
+        },
+    )
+    loader = _OrgLoader([SnykGroupOrg(id="other", name="Somewhere Else")])
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="Platform",
+        stored_org_id="stored-org",
+        stored_integration_type="github-enterprise",
+        group_org_loader=loader,
+    )
+
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="stored-org",
+        resolution="stored",
+        integration_type="github-enterprise",
+    )
+
+
+def test_row_without_stored_org_continues_to_default() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "defaultSnykOrgId": "default-org",
+            "github": [{"orgName": "known", "snykOrgId": "mapped"}],
+        },
+    )
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="github",
+        lookup_key="unknown",
+        stored_org_id="   ",
+        stored_integration_type=None,
+    )
+
+    assert resolved == ResolvedScopeMapping(
+        snyk_org_id="default-org",
+        resolution="default",
+        integration_type="github",
+    )
+
+
+def test_ambiguous_org_names_stop_without_default() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "defaultSnykOrgId": "default-org",
+            "azure-repos": {
+                "matchSnykOrgName": {"enabled": True, "normalize": True},
+            },
+        },
+    )
+    loader = _OrgLoader(
+        [
+            SnykGroupOrg(id="org-a", name="Systemes Centraux"),
+            SnykGroupOrg(id="org-b", name="systemes centraux"),
+        ],
+    )
+
+    resolved = resolve_scope_mapping(
+        mapping,
+        source="ado",
+        lookup_key="Systèmes Centraux",
+        stored_org_id="stored-org",
+        stored_integration_type="azure-repos",
+        group_org_loader=loader,
+    )
+
+    assert resolved == AmbiguousOrgNameMatch(
+        lookup_key="Systèmes Centraux",
+        source="ado",
+        candidate="Systèmes Centraux",
+        matched_org_names=("Systemes Centraux", "systemes centraux"),
+    )
+
+
+def test_group_list_failure_does_not_use_stored_or_default_org() -> None:
+    mapping = parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "defaultSnykOrgId": "default-org",
+            "github": {
+                "matchSnykOrgName": {"enabled": True, "normalize": False},
+            },
+        },
+    )
+    loader = _OrgLoader(error=SnykApiError("Snyk API GET /v1/group/group-1/orgs failed"))
+
+    with pytest.raises(SnykApiError, match="group/group-1/orgs"):
+        resolve_scope_mapping(
+            mapping,
+            source="github",
+            lookup_key="Platform",
+            stored_org_id="stored-org",
+            stored_integration_type="github",
+            group_org_loader=loader,
         )

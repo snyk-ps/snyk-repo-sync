@@ -100,18 +100,19 @@ On `kafka`, `worker run` starts the HTTP listener and the Storage Queue follow-u
 
 ### Scope mapping (`scopeMapping`)
 
-Maps provider scopes to Snyk organization ids. Top-level keys under `scopeMapping` other than `defaultSnykOrgId` and `propertyExtractors` MUST be Snyk integration types. Optional `snykIntegrationId` per entry skips integration list API calls; when omitted the worker resolves integration ids via the Snyk API and caches them in process memory.
+Maps provider scopes to Snyk organization ids. Top-level keys under `scopeMapping` other than `defaultSnykOrgId`, `propertyExtractors`, and `snykGroupId` MUST be Snyk integration types. Optional `snykIntegrationId` per entry skips integration list API calls; when omitted the worker resolves integration ids via the Snyk API and caches them in process memory.
 
 
 | Key                 | Required | Description                                                        |
 | ------------------- | -------- | ------------------------------------------------------------------ |
-| `defaultSnykOrgId`  | No       | Fallback Snyk org id when no explicit entry matches. Using it logs a warning (`scope_mapping_default`) |
+| `defaultSnykOrgId`  | No       | Fallback Snyk org id after static rows, org-name match, and a stored org id all miss. Using it logs a warning (`scope_mapping_default`) |
+| `snykGroupId`       | When name match is enabled | Snyk group id for `GET /v1/group/{groupId}/orgs`. Not an integration type |
 | `propertyExtractors` | No      | One extractor per provider (`github`, `azure-repos`) that reads a property value from the message |
-| `azure-repos`       | No       | List of ADO project or property-value mappings (Snyk integration type `azure-repos`) |
-| `github`            | No       | List of GitHub org or property-value mappings for Snyk integration type `github` |
-| `github-cloud-app`  | No       | GitHub org mappings for Snyk integration type `github-cloud-app`   |
-| `github-server-app` | No       | GitHub org mappings for Snyk integration type `github-server-app`  |
-| `github-enterprise` | No       | GitHub org mappings for Snyk integration type `github-enterprise`  |
+| `azure-repos`       | No       | ADO mappings (Snyk integration type `azure-repos`), as a list or as an object with `entries` and `matchSnykOrgName` |
+| `github`            | No       | GitHub mappings for Snyk integration type `github`, as a list or as an object |
+| `github-cloud-app`  | No       | GitHub mappings for Snyk integration type `github-cloud-app`       |
+| `github-server-app` | No       | GitHub mappings for Snyk integration type `github-server-app`      |
+| `github-enterprise` | No       | GitHub mappings for Snyk integration type `github-enterprise`      |
 
 
 Each `azure-repos` entry (ADO):
@@ -138,13 +139,36 @@ Each **GitHub integration type** entry (`github`, `github-cloud-app`, `github-se
 
 The integration type for API lookup is determined by the section key (for example `github-cloud-app`), not a per-entry field. The worker matches that value against `GET /v1/org/{org_id}/integrations` to resolve the integration id. It also sends the same value as the `source_types` filter on `GET /rest/orgs/{org_id}/targets`; import itself uses the resolved integration id at `POST /v1/org/{org_id}/integrations/{integration_id}/import`.
 
-When using `defaultSnykOrgId` without an explicit scope entry, the worker uses `azure-repos` for ADO events. For GitHub events it uses `github` unless exactly one GitHub integration type section is configured, in which case that type is used.
+An integration section is either a list of those entries or a mapping:
 
-**Property extractors:** `collectionPath` is a dotted object path from the received JSON root to an array of objects. The worker keeps elements whose `matchField` equals `matchValue` and reads `valueField`. For the GitHub updated fixture the path is `newPropertyValues`, `matchField` is `property_name`, `matchValue` is `azure-devops-project`, and `valueField` is `value`. The same four fields work for `azure-repos` when an operator supplies a path. A non-empty extracted value is the lookup key and does not fall through to `orgName` or `projectName`. A missing path, or a null or blank value, uses the name mapping.
+```yaml
+github-enterprise:
+  entries: []          # optional; same rules as a list. An empty object section still counts as that integration type
+  matchSnykOrgName:
+    enabled: true      # required boolean when matchSnykOrgName is present
+    normalize: true    # required boolean; NFKD, strip accents, and ignore case
+```
+
+`enabled: false` leaves name match off and does not call the group API. `enabled: true` requires `snykGroupId`. At most one GitHub section and at most one `azure-repos` section may set `enabled: true`. The enabling section key is the integration type for a name match. `normalize: false` compares trimmed strings exactly. `normalize: true` applies Unicode NFKD, removes nonspacing marks, and casefolds both the candidate and the org name. Spaces and punctuation stay significant, so `Systèmes Centraux` matches `systemes centraux` and does not match `Systemes-Centraux`.
+
+The worker lists orgs with `GET /v1/group/{groupId}/orgs` and caches that list in process memory for 15 minutes. A static row does not call the group API. The token needs permission to list organizations in the group.
+
+**Resolution order:** The worker stops at the first success:
+
+1. Static `propertyValue` when the extractor returns a value, otherwise static `orgName` or `projectName`. An extracted value does not consult `orgName` or `projectName`.
+2. Org-name match when `matchSnykOrgName.enabled` is true. One match uses that org id. Zero matches continue. Two or more matches log `scope_mapping_org_name_ambiguous`, write no org id, and perform no Snyk side effects.
+3. Non-empty `snykOrgId` stored on the repository sync-state row, with that row's `snykIntegrationType`. A missing or blank `snykOrgId` misses this step.
+4. `defaultSnykOrgId` when it is set.
+
+A group-list failure fails the message like any other Snyk API error and does not continue to the stored org or the default org. After a successful resolution, repository upserts store `snykOrgId` and `snykIntegrationType` and replace them when a later event resolves to a different org.
+
+When using `defaultSnykOrgId`, the worker uses `azure-repos` for ADO events. For GitHub events it uses `github` unless exactly one GitHub integration type section is configured, in which case that type is used. That default applies only to the `defaultSnykOrgId` step. An object section with no entries still counts as that configured type.
+
+**Property extractors:** `collectionPath` is a dotted object path from the received JSON root to an array of objects. The worker keeps elements whose `matchField` equals `matchValue` and reads `valueField`. For the GitHub updated fixture the path is `newPropertyValues`, `matchField` is `property_name`, `matchValue` is `azure-devops-project`, and `valueField` is `value`. The same four fields work for `azure-repos` when an operator supplies a path. A non-empty extracted value is the candidate and does not fall through to `orgName` or `projectName`. A missing path, or a null or blank value, uses the name mapping.
 
 **Lookup keys:** When no property value is extracted, ADO events use `ado.projectName` from the normalized audit record and GitHub events use `repository.owner.login`. `scopeId` stays the ADO project id or GitHub org login. Importing a GitHub repository does not deactivate an existing Azure DevOps Snyk target; that retirement is a later change.
 
-**Unmapped scopes:** When no entry matches and `defaultSnykOrgId` is set, the worker imports into that org and logs a warning with marker `scope_mapping_default`. When no default org is set, the worker logs a warning with marker `scope_mapping_unmapped` and completes the message without Snyk side effects. Explicit matches stay at info.
+**Unmapped scopes:** When static mapping, org-name match, and the stored org id all miss and `defaultSnykOrgId` is set, the worker imports into that org and logs a warning with marker `scope_mapping_default`. When no default org is set, the worker logs a warning with marker `scope_mapping_unmapped` and completes the message without Snyk side effects. A static match, a unique org-name match (`scope_mapping_org_name`), and a stored-org match stay at info and omit both warning markers.
 
 Duplicate `projectName` or `orgName` values within a list cause startup failure.
 
@@ -333,7 +357,7 @@ Table name defaults to `SnykSyncState`. Repository state rows use:
 | `RowKey`       | `{repositoryId}`                                         |
 
 
-Scope-to-Snyk mapping is **not** stored in Table Storage — it lives in the operator `scopeMapping` config section per `openspec/specs/scope-mapping/spec.md`.
+Scope-to-Snyk mapping rules are **not** stored in Table Storage — they live in the operator `scopeMapping` config section per `openspec/specs/scope-mapping/spec.md`. A repository row may store the resolved `snykOrgId` and `snykIntegrationType` from the last successful resolution.
 
 ### Repository row
 
@@ -351,6 +375,8 @@ Scope-to-Snyk mapping is **not** stored in Table Storage — it lives in the ope
 | `tagApplied`       | boolean | Repository id tag applied (`false` until tagging change lands) |
 | `importJobId`      | string  | Last Snyk import job id (retained after success for audit)     |
 | `importStatus`     | string  | `pending`, `failed`, or `complete`                             |
+| `snykOrgId`        | string  | Resolved Snyk org id. Missing or blank means no stored org     |
+| `snykIntegrationType` | string | Integration type used with `snykOrgId` (`azure-repos`, `github`, `github-cloud-app`, `github-server-app`, or `github-enterprise`) |
 
 
 Repository rows are written when import starts (`pending`) and updated when import completes. The table is created on worker startup when missing.
@@ -443,7 +469,7 @@ Supported ADO audit `ActionId` values: `Git.RepositoryCreated`, `Git.RepositoryR
 - Valid ADO messages for **mapped** scopes trigger Snyk import/deactivate/delete per lifecycle event; import completion is async via scheduled follow-ups
 - Valid ADO messages for **unmapped** scopes log a **warning** and complete without Snyk side effects
 - Valid GitHub messages for **mapped** orgs follow the same lifecycle and import deferral contract as ADO
-- Valid GitHub messages for **unmapped** orgs, and any scope that falls back to `defaultSnykOrgId`, log a **warning** (`scope_mapping_unmapped` or `scope_mapping_default`) and unmapped messages complete without Snyk side effects
+- Valid GitHub messages for **unmapped** orgs, and any scope that falls back to `defaultSnykOrgId` after static mapping, org-name match, and a stored org id all miss, log a **warning** (`scope_mapping_unmapped` or `scope_mapping_default`) and unmapped messages complete without Snyk side effects. A unique org-name match logs `scope_mapping_org_name`. More than one matching org name logs `scope_mapping_org_name_ambiguous` and completes without Snyk side effects
 - GitHub `edited` webhooks without a default-branch change complete without sync
 - Messages dead-letter with `ImportJobFailed` when import job polling exceeds max retries
 - Repeated `target_resolve_failed` warnings after a successful import, with the target visible in Snyk but no projects yet, usually mean the worker listed targets without `exclude_empty=false`. The Snyk REST Targets API defaults to omitting empty targets; upgrade to **`v1.1.1`** or later.

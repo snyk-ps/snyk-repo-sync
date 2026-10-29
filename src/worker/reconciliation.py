@@ -7,12 +7,17 @@ import threading
 from dataclasses import dataclass
 
 from config.ignored_repos import IgnoredReposSettings, is_ignored
-from config.scope_mapping import UnmappedScope, resolve_scope_mapping
+from config.scope_mapping import (
+    AmbiguousOrgNameMatch,
+    ScopeSource,
+    UnmappedScope,
+    resolve_scope_mapping,
+)
 from sync_state.client import ActiveRepositoryRow, SyncStateStore
 from sync_state.entities import RepositoryState
 from worker.idempotency import compute_desired_state_hash
 from worker.ignore_policy import IgnorePolicyState
-from worker.lifecycle import WorkerSyncDependencies, _apply_target_removal
+from worker.lifecycle import WorkerSyncDependencies, _apply_target_removal, log_scope_resolution
 from worker.target_resolve import TargetLookup, ensure_snyk_target_id
 
 logger = logging.getLogger(__name__)
@@ -81,11 +86,25 @@ def _remove_ignored_target(
     match_reason: str,
     deps: WorkerSyncDependencies,
 ) -> bool:
+    scope_source: ScopeSource = "github" if row.source == "github" else "ado"
     resolution = resolve_scope_mapping(
         deps.scope_mapping,
-        source=row.source,
+        source=scope_source,
         lookup_key=row.state.owner_name,
+        stored_org_id=row.state.snyk_org_id,
+        stored_integration_type=row.state.snyk_integration_type,
+        group_org_loader=deps.snyk.list_group_orgs,
     )
+    log_scope_resolution(
+        resolution,
+        source=scope_source,
+        lookup_key=row.state.owner_name,
+        event_id=row.state.last_event_id,
+        scope_id=row.scope_id,
+        repository_id=row.repository_id,
+    )
+    if isinstance(resolution, AmbiguousOrgNameMatch):
+        return False
     if isinstance(resolution, UnmappedScope):
         logger.warning(
             "Ignored repository has unmapped scope during reconciliation source=%s "
@@ -107,6 +126,7 @@ def _remove_ignored_target(
         stored_id=row.state.snyk_target_id,
         lookup=lookup,
         snyk=deps.snyk,
+        source_type=resolution.integration_type or "azure-repos",
     )
     if not target_id:
         logger.info(
@@ -155,6 +175,8 @@ def _remove_ignored_target(
         import_job_id=row.state.import_job_id,
         import_status="complete",
         owner_name=row.state.owner_name,
+        snyk_org_id=resolution.snyk_org_id if resolution.integration_type else None,
+        snyk_integration_type=resolution.integration_type,
     )
     deps.sync_state.upsert_repository(
         inactive_state,

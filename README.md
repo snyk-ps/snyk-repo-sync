@@ -320,7 +320,7 @@ Fixtures live under `data/fixtures/`. See **[CONTRIBUTING.md](CONTRIBUTING.md)**
 | Integration tests skipped                          | Config file missing or invalid                                                                                                       |
 | Messages dead-lettered with `InvalidMessage`       | Queue message body is not valid Event Grid JSON (ADO) or GitHub webhook JSON                                                         |
 | Messages dead-lettered with `InvalidNormalization` | ADO audit record missing required fields or unsupported `ActionId`                                                                   |
-| Log warnings `scope_mapping_unmapped` or `scope_mapping_default` | Add a `projectName`, `orgName`, or `propertyValue` entry, or set `defaultSnykOrgId` — see **[CONFIGURATION.md](CONFIGURATION.md)** |
+| Log warnings `scope_mapping_unmapped`, `scope_mapping_default`, or `scope_mapping_org_name_ambiguous` | Add a static entry, enable `matchSnykOrgName` with `snykGroupId`, or set `defaultSnykOrgId`. A stored `snykOrgId` is used after static and org-name misses. An ambiguous marker means more than one org name matched — see **[CONFIGURATION.md](CONFIGURATION.md)** |
 
 
 

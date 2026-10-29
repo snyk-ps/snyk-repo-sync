@@ -38,10 +38,12 @@ http:
   processingConcurrency: 1
 
 # Optional: map ADO project names, GitHub org logins, or extracted property
-# values to Snyk organization ids. A missing match uses defaultSnykOrgId and
-# logs a warning. With no default, the worker logs a warning and skips Snyk.
+# values to Snyk organization ids. Resolution stops at the first success:
+# static row, org-name match, snykOrgId stored on the repository row, then
+# defaultSnykOrgId. With no default, the worker logs a warning and skips Snyk.
 scopeMapping:
   defaultSnykOrgId: "00000000-0000-0000-0000-000000000000"
+#   snykGroupId: "11111111-2222-3333-4444-555555555555"  # required when matchSnykOrgName.enabled is true
 #   azure-repos:
 #     - projectName: Contoso-Platform
 #       snykOrgId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
@@ -52,12 +54,17 @@ scopeMapping:
 #       matchField: property_name
 #       matchValue: azure-devops-project
 #       valueField: value
-#   github-cloud-app:
-#     - orgName: contoso
-#       snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
-#     - propertyValue: sample-project
-#       snykOrgId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
-#   # Other supported GitHub keys: github, github-server-app, github-enterprise.
+#   github-enterprise:
+#     entries:
+#       - orgName: contoso
+#         snykOrgId: "ffffffff-ffff-ffff-ffff-ffffffffffff"
+#       - propertyValue: sample-project
+#         snykOrgId: "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+#     matchSnykOrgName:
+#       enabled: true    # compare the candidate to org names in snykGroupId
+#       normalize: true  # strip accents and ignore case; punctuation stays significant
+#   # A section may also be a bare list. Other GitHub keys: github, github-cloud-app,
+#   # github-server-app. At most one GitHub section may set enabled: true.
 #   # azure-repos accepts projectName or propertyValue rows. propertyValue requires
 #   # propertyExtractors.azure-repos. A GitHub import does not deactivate an ADO target.
 
