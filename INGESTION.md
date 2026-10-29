@@ -67,7 +67,7 @@ Some GitHub deployments set `messaging.transport: kafka`. On that path:
 
 The endpoint has no application authentication. Do not create a public route. Configure customer-managed private networking so only the event connector can reach the configured `http.bindHost` and `http.port`. Terminate TLS and enforce source restrictions in the deployment network. Set the connector request timeout longer than the worker's initial synchronous processing time.
 
-The endpoint accepts `renamed`, `edited`, `deleted`, and the parsed updated body in `data/fixtures/github_parsed_updated.json`. That body has top-level `repository` and `newPropertyValues` and is the GitHub import. It selects the Snyk org from `scopeMapping` property values when `collectionPath` is `newPropertyValues`. It rejects `created` and ADO payloads. Importing from this event does not deactivate an existing Azure DevOps Snyk target.
+The endpoint accepts `renamed`, `edited`, `deleted`, and the parsed updated body in `data/fixtures/github_parsed_updated.json`. That body has top-level `repository` and `newPropertyValues` and is the GitHub import. It selects the Snyk org in order: a `scopeMapping` property value when `collectionPath` is `newPropertyValues`, then an org-name match when `matchSnykOrgName.enabled` is true, then a `snykOrgId` stored on the repository row, then `defaultSnykOrgId`. It rejects `created` and ADO payloads. Importing from this event does not deactivate an existing Azure DevOps Snyk target.
 
 Assign the worker identity **Storage Queue Data Contributor** on the storage account and **Storage Table Data Contributor** on the table or account. Configure `storageQueue` and `http` as described in **[CONFIGURATION.md](CONFIGURATION.md)**. Keep minimum replicas at one because this guide does not define a Storage Queue scaler.
 
@@ -196,7 +196,7 @@ The worker detects raw webhook and parsed lifecycle JSON by top-level `repositor
 | Parsed contract | top-level `deliveryId` | `deliveryId` |
 | Raw webhook | otherwise | `repository.updated_at`-based fallback or ingress metadata |
 
-**Scope:** `repository.owner.login` when `owner.type` is `Organization` (sync-state partition `github:{orgLogin}`). Snyk org selection can use a configured property value instead of the org login. For the updated fixture the extractor path is `newPropertyValues`. See **[CONFIGURATION.md](CONFIGURATION.md)**.
+**Scope:** `repository.owner.login` when `owner.type` is `Organization` (sync-state partition `github:{orgLogin}`). Snyk org selection stops at the first success: a configured property value (for the updated fixture the extractor path is `newPropertyValues`), an org-name match when `matchSnykOrgName.enabled` is true, the `snykOrgId` stored on the repository row, then `defaultSnykOrgId`. See **[CONFIGURATION.md](CONFIGURATION.md)**.
 
 **Actions:**
 

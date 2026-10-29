@@ -8,10 +8,14 @@ from unittest.mock import patch
 from config.errors import ConfigError
 from config.scope_mapping import (
     AdoScopeEntry,
+    AmbiguousOrgNameMatch,
     ResolvedScopeMapping,
     ScopeMappingSettings,
     UnmappedScope,
+    parse_scope_mapping,
 )
+from snyk.client import SnykGroupOrg
+from sync_state.entities import RepositoryState
 from config.snyk_settings import SnykSettings, TargetRemovalSettings
 from snyk.client import SnykApiError
 from worker.handler import HandleResult, handle_queue_message, process_message_body
@@ -419,3 +423,119 @@ def test_updated_event_without_mapping_or_default_skips_snyk(caplog) -> None:
     deps.snyk.start_import.assert_not_called()
     deps.snyk.deactivate_all_projects_for_target.assert_not_called()
     deps.snyk.delete_snyk_target.assert_not_called()
+
+
+def _name_match_mapping() -> ScopeMappingSettings:
+    return parse_scope_mapping(
+        {
+            "snykGroupId": "group-1",
+            "defaultSnykOrgId": "default-org",
+            "azure-repos": {
+                "matchSnykOrgName": {"enabled": True, "normalize": True},
+            },
+        },
+    )
+
+
+def _stored_repository(org_id: str | None = "stored-org") -> RepositoryState:
+    return RepositoryState(
+        repo_name="demo",
+        snyk_target_id="",
+        default_branch="main",
+        status="active",
+        desired_state_hash="hash",
+        last_event_id="old",
+        tag_applied=False,
+        import_job_id="",
+        import_status="complete",
+        snyk_org_id=org_id,
+        snyk_integration_type="azure-repos" if org_id else None,
+    )
+
+
+def test_org_name_match_logs_without_default_marker_or_secrets(caplog) -> None:
+    mapping = _name_match_mapping()
+    deps = _deps_for(mapping)
+    deps.snyk.list_group_orgs.return_value = [SnykGroupOrg(id="org-platform", name="Proj")]
+    secret = "super-secret-token"
+    deps.snyk.token = secret
+
+    with caplog.at_level("INFO"):
+        result = handle_queue_message(_ado_created_body("Proj"), scope_mapping=mapping, sync_deps=deps)
+
+    assert isinstance(result.scope_resolution, ResolvedScopeMapping)
+    assert result.scope_resolution.resolution == "org_name"
+    assert result.scope_resolution.snyk_org_id == "org-platform"
+    assert "scope_mapping_org_name" in caplog.text
+    assert "candidate=Proj" in caplog.text
+    assert "matched_org_name=Proj" in caplog.text
+    assert "snyk_org_id=org-platform" in caplog.text
+    assert "scope_mapping_default" not in caplog.text
+    assert "scope_mapping_unmapped" not in caplog.text
+    assert secret not in caplog.text
+    assert deps.snyk.start_import.call_args.args[0] == "org-platform"
+    saved = deps.sync_state.upsert_repository.call_args.args[0]
+    assert saved.snyk_org_id == "org-platform"
+    assert saved.snyk_integration_type == "azure-repos"
+
+
+def test_ambiguous_org_name_skips_snyk_side_effects(caplog) -> None:
+    mapping = _name_match_mapping()
+    deps = _deps_for(mapping)
+    deps.snyk.list_group_orgs.return_value = [
+        SnykGroupOrg(id="org-a", name="Proj"),
+        SnykGroupOrg(id="org-b", name="proj"),
+    ]
+    secret = "super-secret-token"
+
+    with caplog.at_level("INFO"):
+        result = handle_queue_message(_ado_created_body("Proj"), scope_mapping=mapping, sync_deps=deps)
+
+    assert isinstance(result.scope_resolution, AmbiguousOrgNameMatch)
+    assert result.settlement == "complete"
+    assert result.scheduled_followups == ()
+    assert "scope_mapping_org_name_ambiguous" in caplog.text
+    assert "candidate=Proj" in caplog.text
+    assert "scope_mapping_default" not in caplog.text
+    assert "scope_mapping_unmapped" not in caplog.text
+    assert "org-a" not in caplog.text
+    assert secret not in caplog.text
+    deps.snyk.start_import.assert_not_called()
+    deps.snyk.deactivate_all_projects_for_target.assert_not_called()
+    deps.snyk.delete_snyk_target.assert_not_called()
+    deps.sync_state.upsert_repository.assert_not_called()
+
+
+def test_stored_org_is_used_when_name_match_misses(caplog) -> None:
+    mapping = _name_match_mapping()
+    deps = _deps_for(mapping)
+    deps.sync_state.get_repository.return_value = _stored_repository()
+    deps.snyk.list_group_orgs.return_value = []
+
+    with caplog.at_level("INFO"):
+        result = handle_queue_message(_ado_created_body("missing"), scope_mapping=mapping, sync_deps=deps)
+
+    assert isinstance(result.scope_resolution, ResolvedScopeMapping)
+    assert result.scope_resolution.resolution == "stored"
+    assert result.scope_resolution.snyk_org_id == "stored-org"
+    assert "scope_mapping_default" not in caplog.text
+    assert "scope_mapping_unmapped" not in caplog.text
+    assert deps.snyk.start_import.call_args.args[0] == "stored-org"
+
+
+def test_group_list_failure_fails_the_message_without_side_effects() -> None:
+    mapping = _name_match_mapping()
+    deps = _deps_for(mapping)
+    deps.sync_state.get_repository.return_value = _stored_repository()
+    deps.snyk.list_group_orgs.side_effect = SnykApiError(
+        "Snyk API GET /v1/group/group-1/orgs failed",
+    )
+
+    outcome = process_message_body(_ado_created_body("missing"), scope_mapping=mapping, sync_deps=deps)
+
+    assert outcome.status == "failed"
+    assert outcome.reason == "SnykApiError"
+    assert outcome.description is not None
+    assert "group/group-1/orgs" in outcome.description
+    deps.snyk.start_import.assert_not_called()
+    deps.sync_state.upsert_repository.assert_not_called()

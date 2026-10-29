@@ -91,3 +91,75 @@ repos:
     assert stats.removed == 1
     snyk.deactivate_all_projects_for_target.assert_called_once_with("org-1", "target-1")
     sync_state.upsert_repository.assert_called_once()
+    saved = sync_state.upsert_repository.call_args.args[0]
+    assert saved.snyk_org_id == "org-1"
+    assert saved.snyk_integration_type == "azure-repos"
+    snyk.list_group_orgs.assert_not_called()
+
+
+def test_reconciliation_uses_stored_org_when_static_mapping_misses(tmp_path) -> None:
+    policy_path = tmp_path / "ignored-repos.yaml"
+    policy_path.write_text("repos: []\n", encoding="utf-8")
+    policy_state = IgnorePolicyState()
+    policy_state.policy = parse_ignore_policy_document(
+        {"repos": [{"source": "github", "owner": "contoso", "name": "archived"}]},
+    )
+    sync_state = MagicMock()
+    sync_state.load_persisted_ignore_policy.return_value = policy_state.policy
+    sync_state.list_active_repositories.return_value = [
+        ActiveRepositoryRow(
+            source="github",
+            scope_id="contoso",
+            repository_id="repo",
+            state=RepositoryState(
+                repo_name="archived",
+                snyk_target_id="target-1",
+                default_branch="main",
+                status="active",
+                desired_state_hash="hash",
+                last_event_id="evt-1",
+                tag_applied=False,
+                import_job_id="job-1",
+                import_status="complete",
+                owner_name="contoso",
+                snyk_org_id="stored-org",
+                snyk_integration_type="github-enterprise",
+            ),
+        ),
+    ]
+    snyk = MagicMock()
+    deps = WorkerSyncDependencies(
+        sync_state=sync_state,
+        snyk=snyk,
+        ado=None,
+        integration_resolver=MagicMock(),
+        scope_mapping=ScopeMappingSettings(
+            default_snyk_org_id="default-org",
+            ado_by_project_name={},
+            github_by_org_name={},
+            configured_github_integration_types=frozenset(),
+        ),
+        snyk_settings=SnykSettings(
+            max_concurrent_pending_imports=100,
+            target_removal=TargetRemovalSettings(
+                on_rename="deactivate",
+                on_default_branch_change="deactivate",
+                on_repo_delete="deactivate",
+                on_ignore="deactivate",
+            ),
+        ),
+    )
+
+    stats = run_reconciliation_cycle(
+        settings=IgnoredReposSettings(policy_path=policy_path, reconciliation_interval_minutes=15),
+        policy_state=policy_state,
+        sync_state=sync_state,
+        deps=deps,
+    )
+
+    assert stats.removed == 1
+    snyk.deactivate_all_projects_for_target.assert_called_once_with("stored-org", "target-1")
+    snyk.list_group_orgs.assert_not_called()
+    saved = sync_state.upsert_repository.call_args.args[0]
+    assert saved.snyk_org_id == "stored-org"
+    assert saved.snyk_integration_type == "github-enterprise"

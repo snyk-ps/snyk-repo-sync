@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from config.errors import ConfigError
 
 ScopeSource = Literal["ado", "github"]
-ResolutionKind = Literal["mapped", "default"]
+ResolutionKind = Literal["mapped", "org_name", "stored", "default"]
 SnykIntegrationType = Literal[
     "azure-repos",
     "github",
@@ -25,7 +26,19 @@ GITHUB_INTEGRATION_TYPES = frozenset(
 ALL_INTEGRATION_TYPES = frozenset({ADO_INTEGRATION_TYPE}) | GITHUB_INTEGRATION_TYPES
 EXTRACTOR_PROVIDERS = frozenset({"github", "azure-repos"})
 LEGACY_SCOPE_KEYS = frozenset({"ado"})
-RESERVED_SCOPE_KEYS = frozenset({"defaultSnykOrgId", "propertyExtractors"})
+RESERVED_SCOPE_KEYS = frozenset({"defaultSnykOrgId", "propertyExtractors", "snykGroupId"})
+_SECTION_OBJECT_KEYS = frozenset({"entries", "matchSnykOrgName"})
+_MATCH_KEYS = frozenset({"enabled", "normalize"})
+
+
+class GroupOrgRecord(Protocol):
+    """Organization id and name returned by a group org loader."""
+
+    id: str
+    name: str
+
+
+GroupOrgLoader = Callable[[str], Sequence[GroupOrgRecord]]
 DEFAULT_GITHUB_INTEGRATION_TYPE: SnykIntegrationType = "github"
 _PATH_FORBIDDEN_CHARS = "[]*?()"
 
@@ -47,6 +60,15 @@ class ScopeEntry:
 # Backward-compatible aliases used in tests and call sites.
 AdoScopeEntry = ScopeEntry
 GitHubScopeEntry = ScopeEntry
+
+
+@dataclass(frozen=True)
+class OrgNameMatchSettings:
+    """Org-name match options for one integration section."""
+
+    enabled: bool
+    normalize: bool
+    integration_type: SnykIntegrationType
 
 
 @dataclass(frozen=True)
@@ -78,6 +100,9 @@ class ScopeMappingSettings:
     ado_by_property_value: dict[str, ScopeEntry] = field(default_factory=dict)
     github_by_property_value: dict[str, ScopeEntry] = field(default_factory=dict)
     property_extractors: dict[str, PropertyExtractor] = field(default_factory=dict)
+    snyk_group_id: str | None = None
+    ado_org_name_match: OrgNameMatchSettings | None = None
+    github_org_name_match: OrgNameMatchSettings | None = None
 
     @classmethod
     def empty(cls) -> ScopeMappingSettings:
@@ -96,6 +121,10 @@ class ResolvedScopeMapping:
 
     snyk_org_id: str
     resolution: ResolutionKind
+    integration_type: SnykIntegrationType | None = None
+    integration_id: str | None = None
+    matched_org_name: str | None = None
+    candidate: str | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +133,16 @@ class UnmappedScope:
 
     lookup_key: str
     source: ScopeSource
+
+
+@dataclass(frozen=True)
+class AmbiguousOrgNameMatch:
+    """Candidate matched more than one Snyk organization name."""
+
+    lookup_key: str
+    source: ScopeSource
+    candidate: str
+    matched_org_names: tuple[str, ...]
 
 
 def _parse_collection_path(raw: object, *, label: str) -> tuple[str, ...]:
@@ -215,12 +254,109 @@ def _parse_scope_entries(
         property_target[property_key] = entry
 
 
+def _parse_required_bool(item: dict[str, Any], key: str, *, label: str) -> bool:
+    if key not in item or not isinstance(item.get(key), bool):
+        raise ConfigError(f"{label}.{key} must be a boolean")
+    return bool(item[key])
+
+
+def _parse_match_snyk_org_name(
+    raw: object,
+    *,
+    label: str,
+    integration_type: SnykIntegrationType,
+) -> OrgNameMatchSettings:
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{label} must be a mapping")
+    extra = sorted(set(raw) - _MATCH_KEYS)
+    if extra:
+        names = ", ".join(extra)
+        raise ConfigError(f"{label} contains unsupported keys: {names}")
+    return OrgNameMatchSettings(
+        enabled=_parse_required_bool(raw, "enabled", label=label),
+        normalize=_parse_required_bool(raw, "normalize", label=label),
+        integration_type=integration_type,
+    )
+
+
+def _assign_name_match(
+    current: OrgNameMatchSettings | None,
+    new: OrgNameMatchSettings | None,
+    *,
+    provider_label: str,
+) -> OrgNameMatchSettings | None:
+    if new is None:
+        return current
+    if current is not None and current.enabled and new.enabled:
+        raise ConfigError(
+            f"scopeMapping allows matchSnykOrgName.enabled on only one {provider_label} section",
+        )
+    if current is None or new.enabled:
+        return new
+    return current
+
+
+def _parse_integration_section(
+    raw: object,
+    *,
+    name_field: str,
+    integration_type: SnykIntegrationType,
+    source: ScopeSource,
+    label_prefix: str,
+    name_target: dict[str, ScopeEntry],
+    property_target: dict[str, ScopeEntry],
+    duplicate_name_message: str,
+    duplicate_property_message: str,
+) -> OrgNameMatchSettings | None:
+    """Parse a list section or an object section with entries and name match."""
+    if isinstance(raw, list):
+        _parse_scope_entries(
+            raw,
+            name_field=name_field,
+            integration_type=integration_type,
+            source=source,
+            label_prefix=label_prefix,
+            name_target=name_target,
+            property_target=property_target,
+            duplicate_name_message=duplicate_name_message,
+            duplicate_property_message=duplicate_property_message,
+        )
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{label_prefix} must be a list or a mapping")
+    extra = sorted(set(raw) - _SECTION_OBJECT_KEYS)
+    if extra:
+        names = ", ".join(extra)
+        raise ConfigError(f"{label_prefix} contains unsupported keys: {names}")
+    if "entries" in raw:
+        _parse_scope_entries(
+            raw.get("entries"),
+            name_field=name_field,
+            integration_type=integration_type,
+            source=source,
+            label_prefix=f"{label_prefix}.entries",
+            name_target=name_target,
+            property_target=property_target,
+            duplicate_name_message=duplicate_name_message,
+            duplicate_property_message=duplicate_property_message,
+        )
+    match_raw = raw.get("matchSnykOrgName")
+    if match_raw is None:
+        return None
+    return _parse_match_snyk_org_name(
+        match_raw,
+        label=f"{label_prefix}.matchSnykOrgName",
+        integration_type=integration_type,
+    )
+
+
 def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
     """Parse and validate the ``scopeMapping`` section from operator config.
 
-    Top-level keys other than ``defaultSnykOrgId`` and ``propertyExtractors``
-    MUST be Snyk integration types. ``propertyValue`` rows require an extractor
-    for that provider.
+    Top-level keys other than ``defaultSnykOrgId``, ``propertyExtractors``, and
+    ``snykGroupId`` MUST be Snyk integration types. ``propertyValue`` rows
+    require an extractor for that provider. An integration section is a list
+    of static rows or a mapping with ``entries`` and ``matchSnykOrgName``.
     """
     if raw is None:
         return ScopeMappingSettings.empty()
@@ -234,12 +370,21 @@ def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
             raise ConfigError("scopeMapping.defaultSnykOrgId must be a non-empty string")
         default_snyk_org_id = default_raw.strip()
 
+    group_raw = raw.get("snykGroupId")
+    snyk_group_id: str | None = None
+    if group_raw is not None:
+        if not isinstance(group_raw, str) or not group_raw.strip():
+            raise ConfigError("scopeMapping.snykGroupId must be a non-empty string")
+        snyk_group_id = group_raw.strip()
+
     property_extractors = _parse_property_extractors(raw.get("propertyExtractors"))
     ado_by_project_name: dict[str, ScopeEntry] = {}
     ado_by_property_value: dict[str, ScopeEntry] = {}
     github_by_org_name: dict[str, ScopeEntry] = {}
     github_by_property_value: dict[str, ScopeEntry] = {}
     configured_github_integration_types: set[SnykIntegrationType] = set()
+    ado_org_name_match: OrgNameMatchSettings | None = None
+    github_org_name_match: OrgNameMatchSettings | None = None
 
     for key, value in raw.items():
         if key in RESERVED_SCOPE_KEYS:
@@ -251,36 +396,46 @@ def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
                 "github/github-cloud-app/github-server-app/github-enterprise for GitHub)",
             )
         if key not in ALL_INTEGRATION_TYPES:
-            allowed = ", ".join(sorted(ALL_INTEGRATION_TYPES | {"propertyExtractors"}))
+            allowed = ", ".join(
+                sorted(ALL_INTEGRATION_TYPES | {"propertyExtractors", "snykGroupId"}),
+            )
             raise ConfigError(
                 f"scopeMapping.{key} is not a supported integration type; allowed keys: {allowed}",
             )
         if key == ADO_INTEGRATION_TYPE:
-            _parse_scope_entries(
-                value,
-                name_field="projectName",
-                integration_type=ADO_INTEGRATION_TYPE,
-                source="ado",
-                label_prefix="scopeMapping.azure-repos",
-                name_target=ado_by_project_name,
-                property_target=ado_by_property_value,
-                duplicate_name_message="Duplicate scopeMapping.azure-repos projectName: {key}",
-                duplicate_property_message=(
-                    "Duplicate scopeMapping.azure-repos propertyValue: {key}"
+            ado_org_name_match = _assign_name_match(
+                ado_org_name_match,
+                _parse_integration_section(
+                    value,
+                    name_field="projectName",
+                    integration_type=ADO_INTEGRATION_TYPE,
+                    source="ado",
+                    label_prefix="scopeMapping.azure-repos",
+                    name_target=ado_by_project_name,
+                    property_target=ado_by_property_value,
+                    duplicate_name_message="Duplicate scopeMapping.azure-repos projectName: {key}",
+                    duplicate_property_message=(
+                        "Duplicate scopeMapping.azure-repos propertyValue: {key}"
+                    ),
                 ),
+                provider_label="azure-repos",
             )
         else:
             configured_github_integration_types.add(key)  # type: ignore[arg-type]
-            _parse_scope_entries(
-                value,
-                name_field="orgName",
-                integration_type=key,  # type: ignore[arg-type]
-                source="github",
-                label_prefix=f"scopeMapping.{key}",
-                name_target=github_by_org_name,
-                property_target=github_by_property_value,
-                duplicate_name_message="Duplicate scopeMapping GitHub orgName: {key}",
-                duplicate_property_message="Duplicate scopeMapping GitHub propertyValue: {key}",
+            github_org_name_match = _assign_name_match(
+                github_org_name_match,
+                _parse_integration_section(
+                    value,
+                    name_field="orgName",
+                    integration_type=key,  # type: ignore[arg-type]
+                    source="github",
+                    label_prefix=f"scopeMapping.{key}",
+                    name_target=github_by_org_name,
+                    property_target=github_by_property_value,
+                    duplicate_name_message="Duplicate scopeMapping GitHub orgName: {key}",
+                    duplicate_property_message="Duplicate scopeMapping GitHub propertyValue: {key}",
+                ),
+                provider_label="GitHub",
             )
 
     if ado_by_property_value and "azure-repos" not in property_extractors:
@@ -291,6 +446,15 @@ def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
         raise ConfigError(
             "scopeMapping propertyValue entries require propertyExtractors.github",
         )
+    name_match_enabled = any(
+        settings is not None and settings.enabled
+        for settings in (ado_org_name_match, github_org_name_match)
+    )
+    if name_match_enabled and not snyk_group_id:
+        raise ConfigError(
+            "scopeMapping.snykGroupId must be a non-empty string when "
+            "matchSnykOrgName.enabled is true",
+        )
 
     return ScopeMappingSettings(
         default_snyk_org_id=default_snyk_org_id,
@@ -300,6 +464,9 @@ def parse_scope_mapping(raw: object) -> ScopeMappingSettings:
         ado_by_property_value=ado_by_property_value,
         github_by_property_value=github_by_property_value,
         property_extractors=property_extractors,
+        snyk_group_id=snyk_group_id,
+        ado_org_name_match=ado_org_name_match,
+        github_org_name_match=github_org_name_match,
     )
 
 
@@ -381,14 +548,89 @@ def extract_scope_property(
     return None
 
 
+def _valid_stored_org(
+    stored_org_id: str | None,
+    stored_integration_type: str | None,
+) -> tuple[str, SnykIntegrationType] | None:
+    if not isinstance(stored_org_id, str) or not stored_org_id.strip():
+        return None
+    if stored_integration_type not in ALL_INTEGRATION_TYPES:
+        return None
+    return stored_org_id.strip(), stored_integration_type  # type: ignore[return-value]
+
+
+def _name_match_settings(
+    mapping: ScopeMappingSettings,
+    source: ScopeSource,
+) -> OrgNameMatchSettings | None:
+    if source == "ado":
+        return mapping.ado_org_name_match
+    return mapping.github_org_name_match
+
+
+def _resolve_org_name(
+    mapping: ScopeMappingSettings,
+    *,
+    source: ScopeSource,
+    lookup_key: str,
+    candidate: str,
+    group_org_loader: GroupOrgLoader | None,
+) -> ResolvedScopeMapping | AmbiguousOrgNameMatch | None:
+    """Match the candidate to a group org name, or continue when nothing matches."""
+    settings = _name_match_settings(mapping, source)
+    if settings is None or not settings.enabled:
+        return None
+    # Import lazily so loading config does not cycle through the Snyk package.
+    from snyk.client import SnykApiError
+    from snyk.group_orgs import match_group_orgs
+
+    group_id = mapping.snyk_group_id
+    if not group_id or group_org_loader is None:
+        raise SnykApiError(
+            "Snyk API GET /v1/group/{groupId}/orgs is unavailable",
+        )
+    orgs = group_org_loader(group_id)
+    if not isinstance(orgs, list):
+        raise SnykApiError(
+            f"Snyk API GET /v1/group/{group_id}/orgs returned an invalid group org list",
+        )
+    matches = match_group_orgs(candidate, orgs, normalize=settings.normalize)
+    if len(matches) > 1:
+        return AmbiguousOrgNameMatch(
+            lookup_key=lookup_key,
+            source=source,
+            candidate=candidate,
+            matched_org_names=tuple(org.name for org in matches),
+        )
+    if len(matches) == 1:
+        matched = matches[0]
+        return ResolvedScopeMapping(
+            snyk_org_id=matched.id,
+            resolution="org_name",
+            integration_type=settings.integration_type,
+            matched_org_name=matched.name,
+            candidate=candidate,
+        )
+    return None
+
+
 def resolve_scope_mapping(
     mapping: ScopeMappingSettings,
     *,
     source: ScopeSource,
     lookup_key: str,
     extracted_value: str | None = None,
-) -> ResolvedScopeMapping | UnmappedScope:
-    """Resolve a provider scope lookup key to a Snyk organization id."""
+    stored_org_id: str | None = None,
+    stored_integration_type: str | None = None,
+    group_org_loader: GroupOrgLoader | None = None,
+) -> ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch:
+    """Resolve a provider scope lookup key to a Snyk organization id.
+
+    Stops at the first success: static row, org-name match, non-empty stored
+    org id, then ``defaultSnykOrgId``. A group org list failure raises
+    ``SnykApiError`` and does not continue. Two or more name matches stop
+    without a Snyk org.
+    """
     if extracted_value is not None:
         entry = _property_entries(mapping, source).get(extracted_value)
         effective_key = extracted_value
@@ -400,12 +642,38 @@ def resolve_scope_mapping(
         return ResolvedScopeMapping(
             snyk_org_id=entry.snyk_org_id,
             resolution="mapped",
+            integration_type=entry.integration_type,
+            integration_id=entry.snyk_integration_id,
+        )
+
+    name_match = _resolve_org_name(
+        mapping,
+        source=source,
+        lookup_key=effective_key,
+        candidate=effective_key,
+        group_org_loader=group_org_loader,
+    )
+    if name_match is not None:
+        return name_match
+
+    stored = _valid_stored_org(stored_org_id, stored_integration_type)
+    if stored is not None:
+        org_id, integration_type = stored
+        return ResolvedScopeMapping(
+            snyk_org_id=org_id,
+            resolution="stored",
+            integration_type=integration_type,
         )
 
     if mapping.default_snyk_org_id is not None:
+        if source == "ado":
+            default_type: SnykIntegrationType = ADO_INTEGRATION_TYPE
+        else:
+            default_type = _default_github_integration_type(mapping)
         return ResolvedScopeMapping(
             snyk_org_id=mapping.default_snyk_org_id,
             resolution="default",
+            integration_type=default_type,
         )
 
     return UnmappedScope(lookup_key=effective_key, source=source)

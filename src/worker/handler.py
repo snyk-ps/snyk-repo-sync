@@ -8,6 +8,7 @@ from typing import Literal
 
 from config.errors import ConfigError
 from config.scope_mapping import (
+    AmbiguousOrgNameMatch,
     PropertyExtractionError,
     ResolvedScopeMapping,
     ScopeMappingSettings,
@@ -16,8 +17,16 @@ from config.scope_mapping import (
     resolve_scope_mapping,
 )
 from snyk.client import SnykApiError
+from sync_state.entities import RepositoryState
 from worker.followup import ScheduledFollowUp
-from worker.lifecycle import LifecycleOutcome, WorkerSyncDependencies, process_import_poll, process_lifecycle_deferred, process_normalized_event
+from worker.lifecycle import (
+    LifecycleOutcome,
+    WorkerSyncDependencies,
+    log_scope_resolution,
+    process_import_poll,
+    process_lifecycle_deferred,
+    process_normalized_event,
+)
 from worker.message import (
     INVALID_MESSAGE_REASON,
     InboundMessage,
@@ -48,7 +57,7 @@ class HandleResult:
     scheduled_followups: tuple[ScheduledFollowUp, ...] = ()
     message: QueueMessage | None = None
     normalized: NormalizedEvent | None = None
-    scope_resolution: ResolvedScopeMapping | UnmappedScope | None = None
+    scope_resolution: ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch | None = None
 
 
 @dataclass(frozen=True)
@@ -188,11 +197,25 @@ def handle_queue_message(
         normalized = replace(normalized, scope_property_value=extracted_value)
 
     lookup_key = extracted_value if extracted_value is not None else scope_lookup_key(normalized)
+    stored_org_id: str | None = None
+    stored_integration_type: str | None = None
+    if sync_deps is not None:
+        existing_state = sync_deps.sync_state.get_repository(
+            source=normalized.source,
+            scope_id=normalized.scope_id,
+            repository_id=normalized.repository_id,
+        )
+        if isinstance(existing_state, RepositoryState):
+            stored_org_id = existing_state.snyk_org_id
+            stored_integration_type = existing_state.snyk_integration_type
     resolution = resolve_scope_mapping(
         mapping,
         source=normalized.source,
         lookup_key=scope_lookup_key(normalized),
         extracted_value=extracted_value,
+        stored_org_id=stored_org_id,
+        stored_integration_type=stored_integration_type,
+        group_org_loader=None if sync_deps is None else sync_deps.snyk.list_group_orgs,
     )
 
     if (
@@ -217,6 +240,13 @@ def handle_queue_message(
 
     _log_normalized_event(normalized)
     _log_scope_resolution(normalized, resolution, lookup_key=lookup_key, extracted_value=extracted_value)
+
+    if isinstance(resolution, AmbiguousOrgNameMatch):
+        return HandleResult(
+            message=message,
+            normalized=normalized,
+            scope_resolution=resolution,
+        )
 
     if sync_deps is None or isinstance(resolution, UnmappedScope):
         return HandleResult(
@@ -309,7 +339,7 @@ def _handle_result_from_outcome(
     *,
     message: QueueMessage | None = None,
     normalized: NormalizedEvent | None = None,
-    scope_resolution: ResolvedScopeMapping | UnmappedScope | None = None,
+    scope_resolution: ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch | None = None,
 ) -> HandleResult:
     if outcome.settlement == "dead_letter":
         return HandleResult(
@@ -331,47 +361,17 @@ def _handle_result_from_outcome(
 
 def _log_scope_resolution(
     normalized: NormalizedEvent,
-    resolution: ResolvedScopeMapping | UnmappedScope,
+    resolution: ResolvedScopeMapping | UnmappedScope | AmbiguousOrgNameMatch,
     *,
     lookup_key: str,
     extracted_value: str | None,
 ) -> None:
-    extracted = f" extracted_value={extracted_value}" if extracted_value else ""
-    if isinstance(resolution, UnmappedScope):
-        logger.warning(
-            "scope_mapping_unmapped source=%s lookup_key=%s event_id=%s "
-            "scope_id=%s repository_id=%s%s",
-            resolution.source,
-            lookup_key,
-            normalized.event_id,
-            normalized.scope_id,
-            normalized.repository_id,
-            extracted,
-        )
-        return
-
-    if resolution.resolution == "default":
-        logger.warning(
-            "scope_mapping_default source=%s lookup_key=%s event_id=%s "
-            "scope_id=%s repository_id=%s snyk_org_id=%s%s",
-            normalized.source,
-            lookup_key,
-            normalized.event_id,
-            normalized.scope_id,
-            normalized.repository_id,
-            resolution.snyk_org_id,
-            extracted,
-        )
-        return
-
-    logger.info(
-        "Resolved scope mapping source=%s resolution=%s snyk_org_id=%s "
-        "event_id=%s scope_id=%s lookup_key=%s%s",
-        normalized.source,
-        resolution.resolution,
-        resolution.snyk_org_id,
-        normalized.event_id,
-        normalized.scope_id,
-        lookup_key,
-        extracted,
+    log_scope_resolution(
+        resolution,
+        source=normalized.source,
+        lookup_key=lookup_key,
+        event_id=normalized.event_id,
+        scope_id=normalized.scope_id,
+        repository_id=normalized.repository_id,
+        extracted_value=extracted_value,
     )

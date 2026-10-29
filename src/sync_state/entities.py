@@ -22,10 +22,13 @@ class RepositoryState:
     import_job_id: str
     import_status: ImportStatus
     owner_name: str = ""
+    snyk_org_id: str | None = None
+    snyk_integration_type: str | None = None
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> "RepositoryState":
         """Build repository state from a Table Storage entity."""
+        snyk_org_id = _optional_text(entity.get("snykOrgId"))
         return cls(
             repo_name=str(entity.get("repoName", "")),
             snyk_target_id=str(entity.get("snykTargetId", "")),
@@ -37,11 +40,15 @@ class RepositoryState:
             import_job_id=str(entity.get("importJobId", "")),
             import_status=_parse_import_status(entity.get("importStatus")),
             owner_name=str(entity.get("ownerName", "")),
+            snyk_org_id=snyk_org_id,
+            snyk_integration_type=(
+                _optional_text(entity.get("snykIntegrationType")) if snyk_org_id else None
+            ),
         )
 
     def to_entity(self, partition_key: str, repository_id: str) -> dict[str, Any]:
         """Serialize repository state to a Table Storage entity."""
-        return {
+        entity: dict[str, Any] = {
             "PartitionKey": partition_key,
             "RowKey": repository_id,
             "repoName": self.repo_name,
@@ -55,11 +62,24 @@ class RepositoryState:
             "importStatus": self.import_status,
             "ownerName": self.owner_name,
         }
+        org_id = _optional_text(self.snyk_org_id)
+        integration_type = _optional_text(self.snyk_integration_type)
+        if org_id and integration_type:
+            entity["snykOrgId"] = org_id
+            entity["snykIntegrationType"] = integration_type
+        return entity
 
 
 def repository_partition_key(source: str, scope_id: str) -> str:
     """Build the repository row partition key."""
     return f"{source}:{scope_id}"
+
+
+def _optional_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _parse_import_status(value: Any) -> ImportStatus:
