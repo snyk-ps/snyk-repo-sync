@@ -43,4 +43,4 @@
 
 ## 8. Archive
 
-- [ ] 8.1 Merge `openspec/specs/` only when archiving: do not copy or merge `openspec/changes/snyk-org-name-scope-mapping/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive snyk-org-name-scope-mapping` (or project equivalent) to fold deltas into canonical specs
+- [x] 8.1 Merge `openspec/specs/` only when archiving: do not copy or merge `openspec/changes/snyk-org-name-scope-mapping/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive snyk-org-name-scope-mapping` (or project equivalent) to fold deltas into canonical specs
