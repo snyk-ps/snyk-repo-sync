@@ -13,4 +13,4 @@
 
 ## 4. Archive
 
-- [ ] 4.1 Merge `openspec/specs/` only when archiving: do not copy or merge `openspec/changes/deactivated-default-branch-ignore-source/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive deactivated-default-branch-ignore-source` (or project equivalent) to fold deltas into canonical specs.
+- [x] 4.1 Merge `openspec/specs/` only when archiving: do not copy or merge `openspec/changes/deactivated-default-branch-ignore-source/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive deactivated-default-branch-ignore-source` (or project equivalent) to fold deltas into canonical specs.
