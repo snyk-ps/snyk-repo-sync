@@ -93,11 +93,22 @@ def test_remaining_tie_with_ignores_fails() -> None:
         )
 
 
-def test_deactivated_projects_are_not_eligible() -> None:
+def test_deactivated_source_matches_active_destination() -> None:
+    matches = match_projects(
+        [_project("src", target_reference="develop", deactivated=True)],
+        [_project("dst", target_reference="main")],
+        import_branch="main",
+        source_ids_with_ignores={"src"},
+    )
+
+    assert matches == {"src": "dst"}
+
+
+def test_deactivated_destination_is_not_a_match() -> None:
     with pytest.raises(ProjectMatchError):
         match_projects(
-            [_project("src")],
-            [_project("dst", deactivated=True)],
+            [_project("src", target_reference="develop", deactivated=True)],
+            [_project("dst", target_reference="main", deactivated=True)],
             import_branch="main",
             source_ids_with_ignores={"src"},
         )

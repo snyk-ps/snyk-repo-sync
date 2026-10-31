@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 from config.snyk_settings import SnykSettings, TargetRemovalSettings
 from snyk.client import ProjectIgnore, SnykApiError, SnykProject
 from sync_state.entities import RepositoryState
-from worker.ignore_migration import copy_v1_project_ignores
+from worker.ignore_migration import copy_v1_project_ignores, projects_for_reference
 from worker.lifecycle import WorkerSyncDependencies, process_ignore_migration, process_import_poll
 
 
@@ -16,13 +16,14 @@ def _project(
     project_type: str = "npm",
     target_file: str = "package.json",
     target_reference: str = "main",
+    deactivated: bool = False,
 ) -> SnykProject:
     return SnykProject(
         id=project_id,
         project_type=project_type,
         target_file=target_file,
         target_reference=target_reference,
-        deactivated=False,
+        deactivated=deactivated,
     )
 
 
@@ -209,6 +210,109 @@ def test_retry_limit_dead_letters_without_retirement() -> None:
     snyk.deactivate_all_projects_for_target.assert_not_called()
     snyk.delete_snyk_target.assert_not_called()
     snyk.list_project_ignores.assert_not_called()
+
+
+def test_default_branch_source_list_includes_deactivated_previous_branch() -> None:
+    previous = _project("old", target_reference="develop", deactivated=True)
+    still_active = _project("old-active", target_reference="develop")
+    other_branch = _project("new", target_reference="main", deactivated=True)
+
+    selected = projects_for_reference(
+        [previous, still_active, other_branch],
+        target_reference="develop",
+        include_deactivated=True,
+    )
+
+    assert [project.id for project in selected] == ["old", "old-active"]
+
+
+def test_destination_list_excludes_deactivated_projects() -> None:
+    active = _project("new", target_reference="main")
+    deactivated = _project("dead", target_reference="main", deactivated=True)
+    previous = _project("old", target_reference="develop")
+
+    selected = projects_for_reference(
+        [active, deactivated, previous],
+        target_reference="main",
+    )
+
+    assert [project.id for project in selected] == ["new"]
+
+
+def test_deactivated_previous_branch_ignores_are_copied() -> None:
+    snyk = MagicMock()
+    previous = _project("old", target_reference="develop", deactivated=True)
+    current = _project("new", target_reference="main")
+    snyk.list_projects_for_target.side_effect = [
+        [previous, current],
+        [previous, current],
+        [previous, current],
+    ]
+    snyk.list_project_ignores.return_value = [_ignore()]
+    deps = _deps(
+        state=_state(
+            ignore_migration_kind="default_branch",
+            snyk_target_id="target-1",
+            ignore_source_target_id="target-1",
+            ignore_source_target_reference="develop",
+            default_branch="main",
+        ),
+        snyk=snyk,
+    )
+
+    outcome = _run(deps)
+
+    assert outcome.settlement == "complete"
+    assert [call.args for call in snyk.list_project_ignores.call_args_list] == [("org-1", "old")]
+    snyk.add_missing_project_ignores.assert_called_once_with("org-1", "new", [_ignore()])
+
+
+def test_deactivated_new_branch_destination_is_not_copied() -> None:
+    snyk = MagicMock()
+    previous = _project("old", target_reference="develop", deactivated=True)
+    dead = _project("dead", target_reference="main", deactivated=True)
+    snyk.list_projects_for_target.side_effect = [
+        [previous, dead],
+        [previous, dead],
+    ]
+    snyk.list_project_ignores.return_value = [_ignore()]
+    deps = _deps(
+        state=_state(
+            ignore_migration_kind="default_branch",
+            snyk_target_id="target-1",
+            ignore_source_target_id="target-1",
+            ignore_source_target_reference="develop",
+            default_branch="main",
+        ),
+        snyk=snyk,
+    )
+
+    outcome = _run(deps)
+
+    assert outcome.scheduled_followups
+    assert [call.args for call in snyk.list_project_ignores.call_args_list] == [("org-1", "old")]
+    snyk.add_missing_project_ignores.assert_not_called()
+    snyk.deactivate_project.assert_not_called()
+    snyk.delete_project.assert_not_called()
+
+
+def test_deactivated_rename_source_produces_no_ignores_request() -> None:
+    snyk = MagicMock()
+    deactivated = _project("old", deactivated=True)
+    active = _project("src")
+    destination = _project("dst")
+    snyk.list_projects_for_target.side_effect = [
+        [deactivated, active],
+        [destination],
+    ]
+    snyk.list_project_ignores.return_value = [_ignore()]
+    deps = _deps(state=_state(), snyk=snyk)
+
+    outcome = _run(deps)
+
+    assert outcome.settlement == "complete"
+    assert [call.args for call in snyk.list_project_ignores.call_args_list] == [("org-1", "src")]
+    snyk.add_missing_project_ignores.assert_called_once_with("org-1", "dst", [_ignore()])
 
 
 def test_default_branch_deletes_only_previous_projects() -> None:

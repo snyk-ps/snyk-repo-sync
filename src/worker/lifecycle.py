@@ -852,6 +852,7 @@ def _copy_or_skip_ignores(
         source_projects = projects_for_reference(
             source_projects,
             target_reference=state.ignore_source_target_reference,
+            include_deactivated=True,
         )
         destination_projects = projects_for_reference(
             destination_projects,

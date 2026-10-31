@@ -151,7 +151,9 @@ def copy_v1_project_ignores(
     """Copy v1 project ignores onto matching destination projects.
 
     The destination is read first. An issue id and path already present is left
-    in place. ``ignoredBy`` and ``created`` are not sent.
+    in place. ``ignoredBy`` and ``created`` are not sent. Projects in
+    ``source_projects`` are read whether or not they are deactivated; callers
+    omit deactivated projects when that migration kind stays active-only.
 
     Returns:
         ``skipped`` when no source project has ignores, otherwise ``succeeded``.
@@ -162,8 +164,6 @@ def copy_v1_project_ignores(
     """
     ignores_by_source: dict[str, list[ProjectIgnore]] = {}
     for project in source_projects:
-        if project.deactivated:
-            continue
         ignores = snyk.list_project_ignores(source_org_id, project.id)
         if ignores:
             ignores_by_source[project.id] = ignores
@@ -191,9 +191,18 @@ def projects_for_reference(
     projects: Sequence[SnykProject],
     *,
     target_reference: str | None,
+    include_deactivated: bool = False,
 ) -> list[SnykProject]:
-    """Return non-deactivated projects, optionally limited to one branch."""
-    selected = [project for project in projects if not project.deactivated]
+    """Return projects for ignore migration, optionally limited to one branch.
+
+    Deactivated projects are omitted unless ``include_deactivated`` is true.
+    Default-branch sources set that flag so the previous branch is still read
+    after import. Destination lists leave it false.
+    """
+    if include_deactivated:
+        selected = list(projects)
+    else:
+        selected = [project for project in projects if not project.deactivated]
     if target_reference is None:
         return selected
     return [project for project in selected if project.target_reference == target_reference]

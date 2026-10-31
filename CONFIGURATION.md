@@ -195,7 +195,7 @@ See `openspec/specs/scope-mapping/spec.md` for the full capability contract.
 
 On rename, the source is the previous target. The new repository name is imported first. The previous target is then removed per `targetRemoval.onRename`.
 
-On default branch change, the previous and new branches are `target_reference` values on one target. Ignores are copied from the previous branch's projects to the new branch's projects. Only the previous branch's projects are retired. The target stays.
+On default branch change, the previous and new branches are `target_reference` values on one target. Previous-branch projects are read even when they are already deactivated, and their v1 ignores are copied onto destination projects that are not deactivated. Only the previous branch's projects are retired. The target stays.
 
 On a parsed GitHub updated import, the source is the `azure-repos` target in the resolved Snyk org whose owner is the extracted `azure-devops-project` value, whose repository name is the GitHub repository name, and whose branch is the import branch. The copy runs when that target exists and `migrateIgnores` is `true`. A missing target skips the copy and leaves the GitHub import complete. The worker does not deactivate or delete that Azure DevOps target, or the previous GitHub target. The in-flight fields below are cleared at the end of the attempt and are not a standing link. A parsed updated import whose resolved org or integration differs from a non-empty stored value is imported again. A blank stored org does not by itself force a new import.
 

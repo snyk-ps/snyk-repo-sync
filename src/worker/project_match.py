@@ -21,8 +21,9 @@ def match_projects(
 ) -> dict[str, str]:
     """Return source project id to destination project id for eligible projects.
 
-    Deactivated projects are ignored. A source project with no ignores does not
-    need a destination. A source project with ignores and no unique match fails.
+    A deactivated source is matched when the caller includes it. A deactivated
+    destination is ignored. A source project with no ignores does not need a
+    destination. A source project with ignores and no unique match fails.
 
     Args:
         sources: Projects to copy from.
@@ -36,7 +37,7 @@ def match_projects(
     Raises:
         ProjectMatchError: When a source project with ignores is not unique.
     """
-    eligible_sources = [project for project in sources if not project.deactivated]
+    eligible_sources = list(sources)
     eligible_destinations = [project for project in destinations if not project.deactivated]
     matches: dict[str, str] = {}
     consumed_source_ids: set[str] = set()
