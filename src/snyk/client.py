@@ -14,7 +14,6 @@ from typing import Any, Callable, Literal, Protocol
 from snyk.target_lookup import (
     extract_next_link,
     normalize_repo_name,
-    parse_project_ids,
     parse_target_records,
     select_target_id,
 )
@@ -75,6 +74,29 @@ class ImportTarget:
     owner: str
     name: str
     branch: str
+
+
+@dataclass(frozen=True)
+class SnykProject:
+    """Snyk project fields used to match and retire import targets."""
+
+    id: str
+    project_type: str
+    target_file: str
+    target_reference: str
+    deactivated: bool
+
+
+@dataclass(frozen=True)
+class ProjectIgnore:
+    """One v1 project ignore, without actor or creation metadata."""
+
+    issue_id: str
+    path: str
+    reason: str
+    reason_type: str
+    disregard_if_fixable: bool
+    expires: str | None = None
 
 
 @dataclass(frozen=True)
@@ -214,24 +236,75 @@ class SnykClient:
 
     def list_project_ids_for_target(self, org_id: str, target_id: str) -> list[str]:
         """Return Snyk project ids associated with a target."""
+        return [project.id for project in self.list_projects_for_target(org_id, target_id)]
+
+    def list_projects_for_target(self, org_id: str, target_id: str) -> list[SnykProject]:
+        """Return projects for a target, including match and deactivation fields."""
         path = f"/rest/orgs/{org_id}/projects"
         query = {
             "version": REST_API_VERSION,
             "target_id": target_id,
             "limit": "100",
         }
-        project_ids: list[str] = []
+        projects: list[SnykProject] = []
         next_link: str | None = None
         while True:
             if next_link:
                 payload = self._request_rest_url("GET", next_link)
             else:
                 payload = self._request_rest("GET", path, query=query)
-            project_ids.extend(parse_project_ids(payload))
+            projects.extend(parse_snyk_projects(payload))
             next_link = extract_next_link(payload)
             if not next_link:
                 break
-        return project_ids
+        return projects
+
+    def list_project_ignores(self, org_id: str, project_id: str) -> list[ProjectIgnore]:
+        """Read v1 project ignores for one project."""
+        payload = self._request_json(
+            "GET",
+            f"/v1/org/{org_id}/project/{project_id}/ignores",
+        )
+        return parse_project_ignores(payload)
+
+    def create_project_ignore(self, org_id: str, project_id: str, ignore: ProjectIgnore) -> None:
+        """Create one v1 project ignore without actor or creation metadata."""
+        issue_id = urllib.parse.quote(ignore.issue_id, safe="")
+        self._request_json(
+            "POST",
+            f"/v1/org/{org_id}/project/{project_id}/ignore/{issue_id}",
+            body=project_ignore_create_body(ignore),
+        )
+
+    def add_missing_project_ignores(
+        self,
+        org_id: str,
+        project_id: str,
+        ignores: list[ProjectIgnore],
+    ) -> int:
+        """Create ignores whose issue id and path are not already on the project.
+
+        Returns:
+            The number of ignores created.
+        """
+        existing = {
+            (ignore.issue_id, ignore.path) for ignore in self.list_project_ignores(org_id, project_id)
+        }
+        created = 0
+        for ignore in ignores:
+            if (ignore.issue_id, ignore.path) in existing:
+                continue
+            self.create_project_ignore(org_id, project_id, ignore)
+            created += 1
+        return created
+
+    def delete_project(self, org_id: str, project_id: str) -> None:
+        """Delete one Snyk project and leave its target in place."""
+        self._request_rest(
+            "DELETE",
+            f"/rest/orgs/{org_id}/projects/{project_id}",
+            query={"version": REST_API_VERSION},
+        )
 
     def deactivate_project(self, org_id: str, project_id: str) -> None:
         """Deactivate a single Snyk project."""
@@ -437,6 +510,88 @@ class SnykClient:
             raise SnykApiError(
                 f"Snyk API {method} {url} returned invalid JSON",
             ) from exc
+
+
+def parse_snyk_projects(payload: Any) -> list[SnykProject]:
+    """Extract project match fields from a Snyk REST projects list response."""
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return []
+    projects: list[SnykProject] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        project_id = item.get("id")
+        if not isinstance(project_id, str) or not project_id.strip():
+            continue
+        attributes = item.get("attributes")
+        if not isinstance(attributes, dict):
+            attributes = {}
+        status = attributes.get("status")
+        deactivated_flag = attributes.get("deactivated")
+        deactivated = status in {"inactive", "deactivated"} or deactivated_flag is True
+        projects.append(
+            SnykProject(
+                id=project_id.strip(),
+                project_type=_attribute_text(attributes.get("type")),
+                target_file=_attribute_text(attributes.get("target_file")),
+                target_reference=_attribute_text(attributes.get("target_reference")),
+                deactivated=deactivated,
+            )
+        )
+    return projects
+
+
+def parse_project_ignores(payload: Any) -> list[ProjectIgnore]:
+    """Parse a v1 project-ignores document into issue id and path pairs."""
+    if not isinstance(payload, dict):
+        return []
+    ignores: list[ProjectIgnore] = []
+    for issue_id, entries in payload.items():
+        if not isinstance(issue_id, str) or not issue_id.strip() or not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for path, detail in entry.items():
+                if not isinstance(path, str) or not isinstance(detail, dict):
+                    continue
+                expires = detail.get("expires")
+                if not isinstance(expires, str) or not expires.strip():
+                    expires = detail.get("expiry")
+                expiry = expires.strip() if isinstance(expires, str) and expires.strip() else None
+                ignores.append(
+                    ProjectIgnore(
+                        issue_id=issue_id.strip(),
+                        path=path,
+                        reason=_attribute_text(detail.get("reason")),
+                        reason_type=_attribute_text(detail.get("reasonType")),
+                        disregard_if_fixable=detail.get("disregardIfFixable") is True,
+                        expires=expiry,
+                    )
+                )
+    return ignores
+
+
+def project_ignore_create_body(ignore: ProjectIgnore) -> dict[str, Any]:
+    """Build a v1 create-ignore body that omits actor and creation metadata."""
+    body: dict[str, Any] = {
+        "ignorePath": ignore.path,
+        "reason": ignore.reason,
+        "reasonType": ignore.reason_type,
+        "disregardIfFixable": ignore.disregard_if_fixable,
+    }
+    if ignore.expires:
+        body["expires"] = ignore.expires
+    return body
+
+
+def _attribute_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
 
 
 def _parse_group_orgs(payload: object, *, group_id: str) -> list[SnykGroupOrg]:

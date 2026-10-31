@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 MAX_DEQUEUE_COUNT = 10
 MAX_DEQUEUE_COUNT_REASON = "MaxDequeueCountExceeded"
-_FOLLOW_UP_PHASES = frozenset({"import_poll", "lifecycle_deferred"})
+_FOLLOW_UP_PHASES = frozenset({"import_poll", "lifecycle_deferred", "ignore_migration"})
 
 
 class StorageQueueTransport:

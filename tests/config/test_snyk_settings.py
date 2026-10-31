@@ -14,6 +14,7 @@ def test_parse_snyk_settings_defaults() -> None:
     assert settings.target_removal.on_default_branch_change == "deactivate"
     assert settings.target_removal.on_repo_delete == "deactivate"
     assert settings.target_removal.on_ignore == "deactivate"
+    assert settings.migrate_ignores is True
 
 
 def test_parse_snyk_settings_custom_values() -> None:
@@ -37,6 +38,17 @@ def test_parse_snyk_settings_custom_values() -> None:
 def test_parse_snyk_settings_rejects_invalid_removal_mode() -> None:
     with pytest.raises(ConfigError, match="onRepoDelete"):
         parse_snyk_settings({"targetRemoval": {"onRepoDelete": "destroy"}})
+
+
+def test_parse_snyk_settings_migrate_ignores_explicit_values() -> None:
+    assert parse_snyk_settings({}).migrate_ignores is True
+    assert parse_snyk_settings({"migrateIgnores": True}).migrate_ignores is True
+    assert parse_snyk_settings({"migrateIgnores": False}).migrate_ignores is False
+
+
+def test_parse_snyk_settings_rejects_non_boolean_migrate_ignores() -> None:
+    with pytest.raises(ConfigError, match="migrateIgnores"):
+        parse_snyk_settings({"migrateIgnores": "true"})
 
 
 def test_parse_snyk_settings_rejects_invalid_pending_limit() -> None:

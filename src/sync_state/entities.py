@@ -24,6 +24,11 @@ class RepositoryState:
     owner_name: str = ""
     snyk_org_id: str | None = None
     snyk_integration_type: str | None = None
+    ignore_migration_kind: str = ""
+    ignore_migration_status: str = ""
+    ignore_source_org_id: str = ""
+    ignore_source_target_id: str = ""
+    ignore_source_target_reference: str = ""
 
     @classmethod
     def from_entity(cls, entity: Mapping[str, Any]) -> "RepositoryState":
@@ -44,6 +49,11 @@ class RepositoryState:
             snyk_integration_type=(
                 _optional_text(entity.get("snykIntegrationType")) if snyk_org_id else None
             ),
+            ignore_migration_kind=_text(entity.get("ignoreMigrationKind")),
+            ignore_migration_status=_text(entity.get("ignoreMigrationStatus")),
+            ignore_source_org_id=_text(entity.get("ignoreSourceOrgId")),
+            ignore_source_target_id=_text(entity.get("ignoreSourceTargetId")),
+            ignore_source_target_reference=_text(entity.get("ignoreSourceTargetReference")),
         )
 
     def to_entity(self, partition_key: str, repository_id: str) -> dict[str, Any]:
@@ -61,6 +71,11 @@ class RepositoryState:
             "importJobId": self.import_job_id,
             "importStatus": self.import_status,
             "ownerName": self.owner_name,
+            "ignoreMigrationKind": self.ignore_migration_kind,
+            "ignoreMigrationStatus": self.ignore_migration_status,
+            "ignoreSourceOrgId": self.ignore_source_org_id,
+            "ignoreSourceTargetId": self.ignore_source_target_id,
+            "ignoreSourceTargetReference": self.ignore_source_target_reference,
         }
         org_id = _optional_text(self.snyk_org_id)
         integration_type = _optional_text(self.snyk_integration_type)
@@ -73,6 +88,12 @@ class RepositoryState:
 def repository_partition_key(source: str, scope_id: str) -> str:
     """Build the repository row partition key."""
     return f"{source}:{scope_id}"
+
+
+def _text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
 
 
 def _optional_text(value: Any) -> str | None:

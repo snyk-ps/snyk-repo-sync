@@ -26,6 +26,7 @@ class SnykSettings:
 
     max_concurrent_pending_imports: int
     target_removal: TargetRemovalSettings
+    migrate_ignores: bool = True
 
 
 def _parse_removal_mode(value: object, label: str) -> RemovalMode:
@@ -37,6 +38,14 @@ def _parse_removal_mode(value: object, label: str) -> RemovalMode:
     if mode not in VALID_REMOVAL_MODES:
         raise ConfigError(f"{label} must be 'deactivate' or 'delete'")
     return mode  # type: ignore[return-value]
+
+
+def _parse_migrate_ignores(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    raise ConfigError("snyk.migrateIgnores must be a boolean")
 
 
 def _parse_max_concurrent_pending_imports(value: object) -> int:
@@ -70,6 +79,7 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
                 on_repo_delete="deactivate",
                 on_ignore="deactivate",
             ),
+            migrate_ignores=True,
         )
     if not isinstance(raw, dict):
         raise ConfigError("snyk must be a mapping")
@@ -109,4 +119,5 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
             raw.get("maxConcurrentPendingImports"),
         ),
         target_removal=target_removal,
+        migrate_ignores=_parse_migrate_ignores(raw.get("migrateIgnores")),
     )

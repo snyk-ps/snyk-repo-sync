@@ -180,15 +180,24 @@ See `openspec/specs/scope-mapping/spec.md` for the full capability contract.
 | Key                                   | Required | Default      | Description                                                                                       |
 | ------------------------------------- | -------- | ------------ | ------------------------------------------------------------------------------------------------- |
 | `maxConcurrentPendingImports`         | No       | `100`        | Max repository rows with `importStatus=pending` before deferring new imports (per worker process) |
-| `targetRemoval.onRename`              | No       | `deactivate` | `deactivate` or `delete` for old target on rename                                                 |
-| `targetRemoval.onDefaultBranchChange` | No       | `deactivate` | `deactivate` or `delete` for old target on default branch change                                  |
+| `migrateIgnores`                      | No       | `true`       | Copy v1 project ignores after import. `false` skips the copy and does not call the v1 ignore APIs |
+| `targetRemoval.onRename`              | No       | `deactivate` | `deactivate` or `delete` for the previous target after ignore migration on rename                 |
+| `targetRemoval.onDefaultBranchChange` | No       | `deactivate` | `deactivate` or `delete` for the previous branch's projects after ignore migration                |
 | `targetRemoval.onRepoDelete`          | No       | `deactivate` | `deactivate` or `delete` when provider repo is deleted                                            |
 | `targetRemoval.onIgnore`              | No       | `deactivate` | `deactivate` or `delete` when a repository matches ignore policy                                  |
 
 
-`delete` is irreversible. Default is `deactivate` for all four removal actions.
+`delete` is irreversible. Default is `deactivate` for all four removal actions. `migrateIgnores` defaults to `true` when the key or the `snyk` section is absent. A non-boolean value fails startup.
 
-**Removal semantics:** Snyk has no target-level deactivate API. When mode is `deactivate`, the worker deactivates **every project** under the target via the v1 Projects API. When mode is `delete`, the worker deletes the target via the REST Targets API (`DELETE /rest/orgs/{org_id}/targets/{target_id}`), which removes associated projects.
+**Removal semantics:** Snyk has no target-level deactivate API. For repository deletion and ignore-policy matches, `deactivate` deactivates every project under the target via the v1 Projects API, and `delete` deletes the target via `DELETE /rest/orgs/{org_id}/targets/{target_id}`. Rename uses that same whole-target removal, and it runs only after the new import and v1 ignore migration succeed or are skipped. Default branch change does not delete the target. `deactivate` deactivates only projects whose `target_reference` is the previous branch. `delete` deletes those projects via `DELETE /rest/orgs/{org_id}/projects/{project_id}`.
+
+**Project ignore migration:** After a rename, default branch change, or parsed GitHub updated import completes, the worker runs follow-up phase `ignore_migration`. When `migrateIgnores` is `true`, it copies v1 project ignores from the source projects onto the matching destination projects with `GET /v1/org/{orgId}/project/{projectId}/ignores` and `POST /v1/org/{orgId}/project/{projectId}/ignore/{issueId}`. The copy keeps issue id, path, reason, reason type, `disregardIfFixable`, and expiry. It does not send `ignoredBy` or `created`, so the new ignore is owned by the `SNYK_TOKEN` user. Code consistent ignores are not read or written. `false` skips that copy and does not call the v1 ignore APIs. Rename and default-branch retirement still run after a skip, including when the source has no ignores. A failed copy retries up to 5 times and then dead-letters with reason `IgnoreMigrationFailed`. The source stays active until the copy succeeds or is skipped.
+
+On rename, the source is the previous target. The new repository name is imported first. The previous target is then removed per `targetRemoval.onRename`.
+
+On default branch change, the previous and new branches are `target_reference` values on one target. Previous-branch projects are read even when they are already deactivated, and their v1 ignores are copied onto destination projects that are not deactivated. Only the previous branch's projects are retired. The target stays.
+
+On a parsed GitHub updated import, the source is the `azure-repos` target in the resolved Snyk org whose owner is the extracted `azure-devops-project` value, whose repository name is the GitHub repository name, and whose branch is the import branch. The copy runs when that target exists and `migrateIgnores` is `true`. A missing target skips the copy and leaves the GitHub import complete. The worker does not deactivate or delete that Azure DevOps target, or the previous GitHub target. The in-flight fields below are cleared at the end of the attempt and are not a standing link. A parsed updated import whose resolved org or integration differs from a non-empty stored value is imported again. A blank stored org does not by itself force a new import.
 
 **Target id resolution:** Import job polling does not reliably return a target id. After import completes (and on rename, default-branch change, or delete when state is empty), the worker resolves `snykTargetId` via the REST Targets API using ADO project name, repository name, and branch. Resolved ids are persisted on repository state.
 
@@ -377,6 +386,13 @@ Scope-to-Snyk mapping rules are **not** stored in Table Storage — they live in
 | `importStatus`     | string  | `pending`, `failed`, or `complete`                             |
 | `snykOrgId`        | string  | Resolved Snyk org id. Missing or blank means no stored org     |
 | `snykIntegrationType` | string | Integration type used with `snykOrgId` (`azure-repos`, `github`, `github-cloud-app`, `github-server-app`, or `github-enterprise`) |
+| `ignoreMigrationKind` | string | In-flight migration: `rename`, `default_branch`, `updated`, or empty |
+| `ignoreMigrationStatus` | string | `pending`, `complete`, `skipped`, or empty. Cleared when the attempt finishes |
+| `ignoreSourceOrgId` | string | Source org for the in-flight copy. Empty when unknown |
+| `ignoreSourceTargetId` | string | Source target for the in-flight copy. Empty when unknown |
+| `ignoreSourceTargetReference` | string | Previous branch for a default-branch migration. Empty when unused |
+
+`ignoreMigrationKind` and `ignoreMigrationStatus=pending` are written before import clears `snykTargetId` or replaces `defaultBranch`. All five properties are cleared when the migration attempt finishes, and only after source retirement when the event retires a source. A GitHub updated attempt clears them after the copy or skip.
 
 
 Repository rows are written when import starts (`pending`) and updated when import completes. The table is created on worker startup when missing.
@@ -388,10 +404,10 @@ Snyk import payloads **require** a `branch` value. When the normalized lifecycle
 
 | Event                           | Actions                                                                                                                                                                          |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **repo.created**                | Resolve import branch → start Snyk import → schedule `import_poll` follow-ups until job completes                                                                                |
-| **repo.renamed**                | Resolve old target id → remove old target per `targetRemoval.onRename` (must succeed) → resolve import branch → import new name → poll until job complete and target id resolved |
-| **repo.default_branch_changed** | No action if no prior default branch; else resolve old target id → remove old target → import on new default branch → poll                                                       |
-| **repo.deleted**                | Resolve target id → remove per `targetRemoval.onRepoDelete`; mark state inactive (DLQ if removal fails)                                                                          |
+| **repo.created**                | Resolve import branch → start Snyk import → schedule `import_poll` follow-ups until job completes. A parsed GitHub updated body also records that it was an updated import, re-imports when the stored org or integration differs, then schedules `ignore_migration` to copy v1 ignores from the named Azure DevOps target when `migrateIgnores` is `true`. That copy does not retire the ADO target |
+| **repo.renamed**                | Snapshot the previous target → import the new name → poll until the job completes → copy or skip v1 project ignores → remove the previous target per `targetRemoval.onRename` |
+| **repo.default_branch_changed** | No action if no prior default branch (ADO); else snapshot the previous branch → import the new branch on the same target → poll → copy or skip v1 ignores from the previous `target_reference` → retire only those previous-branch projects. The target stays |
+| **repo.deleted**                | Resolve target id → remove per `targetRemoval.onRepoDelete`; mark state inactive (DLQ if removal fails). No ignore copy |
 
 
 A repository is synced when `importStatus=complete` and `snykTargetId` is set (via REST target lookup after import when not present in state). Project tagging is deferred.
@@ -409,9 +425,10 @@ Used for async import polling and deferred lifecycle retries. Distinguished by t
 | -------------------- | --------------------------------------------------------- |
 | `import_poll`        | Poll Snyk import job status                               |
 | `lifecycle_deferred` | Retry lifecycle work when pending import limit is reached |
+| `ignore_migration`   | Copy or skip v1 project ignores, then retire the source when that event requires it |
 
 
-Import poll follow-ups dead-letter with reason `ImportJobFailed` after 5 retries with exponential backoff.
+Import poll follow-ups dead-letter with reason `ImportJobFailed` after 5 retries with exponential backoff. Ignore migration follow-ups use the same retry budget and dead-letter with reason `IgnoreMigrationFailed`. The source is not retired while `ignoreMigrationStatus` is `pending`.
 
 ### ADO (Event Grid schema)
 

@@ -23,6 +23,7 @@ from worker.lifecycle import (
     LifecycleOutcome,
     WorkerSyncDependencies,
     log_scope_resolution,
+    process_ignore_migration,
     process_import_poll,
     process_lifecycle_deferred,
     process_normalized_event,
@@ -315,6 +316,21 @@ def _handle_internal_message(
         )
         return _handle_result_from_outcome(outcome)
 
+    if internal.sync_phase == "ignore_migration":
+        if internal.ado_project_name is None:
+            raise MessageParseError("ignore_migration message missing required fields")
+        outcome = process_ignore_migration(
+            source=internal.source,
+            scope_id=internal.scope_id,
+            repository_id=internal.repository_id,
+            source_event_id=internal.source_event_id,
+            retry_count=internal.retry_count,
+            scope_lookup_key=internal.ado_project_name,
+            extracted_property_value=internal.extracted_property_value,
+            deps=deps,
+        )
+        return _handle_result_from_outcome(outcome)
+
     outcome = process_lifecycle_deferred(
         {
             "source": internal.source,
@@ -328,6 +344,7 @@ def _handle_internal_message(
             "payload": internal.payload or {},
             "occurredAt": "",
             "extractedPropertyValue": internal.extracted_property_value or "",
+            "parsedUpdatedImport": internal.parsed_updated_import,
         },
         deps=deps,
     )

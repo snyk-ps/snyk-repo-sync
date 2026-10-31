@@ -32,6 +32,7 @@ def test_parsed_created_normalization() -> None:
     assert event.github.org_login == "sample-org"
     assert event.ado is None
     assert event.payload["defaultBranch"] == "main"
+    assert event.parsed_updated_import is False
 
 
 def test_raw_renamed_normalization() -> None:
@@ -78,6 +79,8 @@ def test_parsed_updated_normalizes_to_repo_created() -> None:
     assert event.repository.name == "sample-repo"
     assert event.payload["defaultBranch"] == "main"
     assert event.occurred_at == datetime(2026, 9, 2, 12, 0, tzinfo=UTC)
+    assert event.parsed_updated_import is True
+    assert event.event_type == "repo.created"
 
 
 def test_parsed_updated_fixture_parses_as_github() -> None:

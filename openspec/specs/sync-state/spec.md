@@ -24,6 +24,8 @@ Each repository row MAY store `snykOrgId` and `snykIntegrationType` as strings. 
 
 After successful import, `importJobId` MUST be retained on the repository row for audit. A subsequent import MUST overwrite `importJobId` with the new job id while that job is pending.
 
+During v1 project-ignore migration the row MUST store `ignoreMigrationKind` (`rename`, `default_branch`, `updated`, or empty), `ignoreMigrationStatus` (`pending`, `complete`, `skipped`, or empty), `ignoreSourceOrgId`, `ignoreSourceTargetId`, and `ignoreSourceTargetReference`. The worker MUST set the kind and `ignoreMigrationStatus=pending` before import overwrites `snykTargetId` or `defaultBranch` for rename, default branch change, and a parsed GitHub updated import. The worker MUST clear these five properties when the migration attempt finishes, including the required source retirement when the event retires the source. A GitHub updated attempt MUST clear them after the copy or skip and MUST NOT use them as a standing ADO link.
+
 #### Scenario: Import initiated
 - **WHEN** a Snyk import job is started
 - **THEN** the row is upserted with `importJobId`, `importStatus=pending`, and `tagApplied=false`
@@ -47,6 +49,14 @@ After successful import, `importJobId` MUST be retained on the repository row fo
 #### Scenario: Row without a stored org id
 - **WHEN** a repository row has no `snykOrgId` property
 - **THEN** readers treat the stored Snyk org as absent
+
+#### Scenario: Rename snapshots the previous target before import
+- **WHEN** a repo-renamed event starts an import and the previous target id is known
+- **THEN** the row stores `ignoreMigrationKind=rename`, `ignoreMigrationStatus=pending`, and that previous target id before `snykTargetId` is cleared
+
+#### Scenario: Migration fields cleared after retirement
+- **WHEN** a rename or default-branch migration finishes and the required source retirement succeeds
+- **THEN** `ignoreMigrationKind`, `ignoreMigrationStatus`, `ignoreSourceOrgId`, `ignoreSourceTargetId`, and `ignoreSourceTargetReference` are empty
 
 ### Requirement: Ignore list persistence
 When the ignore-policy file is successfully loaded, its parsed contents MUST be persisted in sync state for use by the worker and background reconciliation loop.
@@ -108,7 +118,7 @@ On startup, the application MUST call `create_table_if_not_exists` for the confi
 - **THEN** startup succeeds without error
 
 ### Requirement: Repository entity property types
-Repository rows MUST persist spec fields as Azure Table entity properties: string fields as strings and `tagApplied` as a boolean.
+Repository rows MUST persist spec fields as Azure Table entity properties: string fields as strings and `tagApplied` as a boolean. `ignoreMigrationKind`, `ignoreMigrationStatus`, `ignoreSourceOrgId`, `ignoreSourceTargetId`, and `ignoreSourceTargetReference` MUST be strings.
 
 #### Scenario: Repository row round-trip
 - **WHEN** a repository row is written and read back

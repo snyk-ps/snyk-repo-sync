@@ -500,3 +500,58 @@ def test_pending_import_limit_defers_lifecycle() -> None:
 
     assert outcome.scheduled_followups[0].body["syncPhase"] == "lifecycle_deferred"
     deps.snyk.start_import.assert_not_called()
+
+
+def test_rename_snapshots_previous_target_before_clearing_it() -> None:
+    sync_state = MagicMock()
+    sync_state.get_repository.return_value = RepositoryState(
+        repo_name="old-name",
+        snyk_target_id="target-old",
+        default_branch="main",
+        status="active",
+        desired_state_hash="hash",
+        last_event_id="evt-old",
+        tag_applied=False,
+        import_job_id="job-old",
+        import_status="complete",
+        snyk_org_id="org-1",
+        snyk_integration_type="azure-repos",
+    )
+    sync_state.count_pending_imports.return_value = 0
+    deps = _deps(sync_state=sync_state)
+    deps.snyk.start_import.return_value = "job-new"
+    event = _created_event(with_default_branch=True)
+    event = NormalizedEvent(
+        source=event.source,
+        event_id="evt-rename",
+        event_type="repo.renamed",
+        scope_id=event.scope_id,
+        repository_id=event.repository_id,
+        occurred_at=event.occurred_at,
+        repository=RepositoryRef(name="new-name"),
+        ado=event.ado,
+        payload={"previousRepoName": "old-name", "defaultBranch": "main"},
+    )
+
+    process_normalized_event(
+        event,
+        ResolvedScopeMapping(
+            snyk_org_id="org-1",
+            resolution="mapped",
+            integration_type="azure-repos",
+        ),
+        deps=deps,
+    )
+
+    deps.snyk.deactivate_all_projects_for_target.assert_not_called()
+    deps.snyk.delete_snyk_target.assert_not_called()
+    first = sync_state.upsert_repository.call_args_list[0].args[0]
+    pending = sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert first.snyk_target_id == "target-old"
+    assert first.ignore_migration_kind == "rename"
+    assert first.ignore_migration_status == "pending"
+    assert first.ignore_source_target_id == "target-old"
+    assert pending.snyk_target_id == ""
+    assert pending.ignore_migration_kind == "rename"
+    assert pending.ignore_source_target_id == "target-old"
+    deps.snyk.start_import.assert_called_once()

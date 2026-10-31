@@ -8,6 +8,7 @@ from worker.idempotency import (
     has_pending_import,
     is_desired_state_current,
     is_duplicate_event,
+    parsed_updated_scope_is_current,
 )
 from worker.normalize import AdoScope, NormalizedEvent, RepositoryRef
 
@@ -117,6 +118,82 @@ def test_desired_state_current_requires_complete_import() -> None:
     )
 
     assert is_desired_state_current(state, desired) is True
+
+
+def test_parsed_updated_reimports_when_stored_org_differs() -> None:
+    state = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="target",
+        default_branch="main",
+        status="active",
+        desired_state_hash="hash",
+        last_event_id="evt-old",
+        tag_applied=False,
+        import_job_id="job",
+        import_status="complete",
+        snyk_org_id="org-old",
+        snyk_integration_type="github",
+    )
+
+    assert (
+        parsed_updated_scope_is_current(
+            state,
+            parsed_updated_import=True,
+            resolved_org_id="org-new",
+            resolved_integration_type="github",
+        )
+        is False
+    )
+
+
+def test_parsed_updated_reimports_when_stored_integration_differs() -> None:
+    state = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="target",
+        default_branch="main",
+        status="active",
+        desired_state_hash="hash",
+        last_event_id="evt-old",
+        tag_applied=False,
+        import_job_id="job",
+        import_status="complete",
+        snyk_org_id="org-1",
+        snyk_integration_type="github",
+    )
+
+    assert (
+        parsed_updated_scope_is_current(
+            state,
+            parsed_updated_import=True,
+            resolved_org_id="org-1",
+            resolved_integration_type="github-enterprise",
+        )
+        is False
+    )
+
+
+def test_blank_stored_org_does_not_force_updated_reimport() -> None:
+    state = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="target",
+        default_branch="main",
+        status="active",
+        desired_state_hash="hash",
+        last_event_id="evt-old",
+        tag_applied=False,
+        import_job_id="job",
+        import_status="complete",
+    )
+
+    assert (
+        parsed_updated_scope_is_current(
+            state,
+            parsed_updated_import=True,
+            resolved_org_id="org-1",
+            resolved_integration_type="github",
+        )
+        is True
+    )
 
 
 def test_pending_import_guard() -> None:
