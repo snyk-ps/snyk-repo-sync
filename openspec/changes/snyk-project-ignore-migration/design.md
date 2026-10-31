@@ -10,7 +10,7 @@ The parsed GitHub updated body normalizes to `repo.created`. It imports a GitHub
 
 **Goals:**
 
-- After a new import is complete, copy v1 project ignores onto the matching new projects, then retire the source where this change already retires it.
+- After a new import is complete, copy v1 project ignores onto the matching new projects when `snyk.migrateIgnores` is true, then retire the source where this change already retires it.
 - On default branch change, retire only the previous branch's projects.
 - On GitHub updated, copy from the ADO target named by `azure-devops-project` when it exists, and re-import when the stored org or integration differs.
 - Retry a failed copy without retiring the source. Document the operator-visible behavior.
@@ -20,7 +20,6 @@ The parsed GitHub updated body normalizes to `repo.created`. It imports a GitHub
 - Code consistent ignores.
 - Deactivating or deleting the ADO target, or the previous GitHub target, after an updated import.
 - A standing GitHub-to-ADO link, or finding and inactivating the ADO sync-state row.
-- A config flag to disable the copy.
 - Project tagging.
 
 ## Decisions
@@ -72,13 +71,19 @@ Before import overwrites the row, persist:
 - `ignoreMigrationStatus`: `pending`
 - `ignoreSourceOrgId`, `ignoreSourceTargetId`, and `ignoreSourceTargetReference` when already known
 
-`import_poll` still means the import job. When the job succeeds and a kind is set, it schedules `syncPhase: ignore_migration` and completes. That phase resolves a missing ADO source, copies, retires when required, then clears the in-flight fields. Failures reschedule it with the existing retry budget (5) and dead-letter reason `IgnoreMigrationFailed`.
+`import_poll` still means the import job. When the job succeeds and a kind is set, it schedules `syncPhase: ignore_migration` and completes. That phase resolves a missing ADO source, copies when `snyk.migrateIgnores` is true, retires when required, then clears the in-flight fields. Failures reschedule it with the existing retry budget (5) and dead-letter reason `IgnoreMigrationFailed`.
 
 Clearing waits until retirement finishes when this event retires the source. Updated clears after the copy or skip.
 
-### 6. Documentation
+### 6. `snyk.migrateIgnores` defaults to true
 
-`CONFIGURATION.md` gains the new order in the lifecycle table, the default-branch project scope, the updated ADO copy, the v1-only boundary, and the in-flight state fields. No example-config change.
+Operator config key `snyk.migrateIgnores` is a boolean. Absent `snyk` section or absent key means `true`. `true` runs the copy. `false` is a successful skip: the worker does not call the v1 ignore APIs, and rename and default-branch retirement still run after import. A non-boolean value fails startup, same as an invalid removal mode.
+
+Alternative considered: default `false` so existing deployments keep today's drop-ignores behavior until opted in. Rejected because the reason for this change is to stop dropping ignores, and operators who need the old behavior can set `false`.
+
+### 7. Documentation
+
+`CONFIGURATION.md` gains the new order in the lifecycle table, the default-branch project scope, the updated ADO copy, the v1-only boundary, the in-flight state fields, and `snyk.migrateIgnores`. `data/config.yaml.example` shows `migrateIgnores: true`.
 
 ## Risks / Trade-offs
 

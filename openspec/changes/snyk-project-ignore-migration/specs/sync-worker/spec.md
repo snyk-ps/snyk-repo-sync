@@ -69,7 +69,7 @@ Listing projects and reading or creating v1 project ignores MUST be allowed for 
 ### Requirement: Custom property updated imports the GitHub repository
 The worker MUST normalize the parsed updated body in `data/fixtures/github_parsed_updated.json` to `repo.created` and MUST record on the normalized event that the body was a parsed updated import. It MUST run the GitHub create flow for that event, including a new import when the org-move rule in idempotency applies. This body is the import signal for the parsed updated contract. The worker MUST NOT require a GitHub `action: created` body before importing.
 
-After that import completes, the worker MUST copy v1 project ignores from the Azure DevOps target identified by the extracted `azure-devops-project` value when that target exists. The lookup MUST use integration type `azure-repos` in the resolved Snyk org, owner equal to that property value, repository name equal to the GitHub repository name, and branch equal to the import branch. A missing ADO target MUST skip the copy and MUST still leave the GitHub import complete.
+After that import completes, and when `snyk.migrateIgnores` is `true`, the worker MUST copy v1 project ignores from the Azure DevOps target identified by the extracted `azure-devops-project` value when that target exists. When `snyk.migrateIgnores` is `false`, the worker MUST skip that copy. The lookup MUST use integration type `azure-repos` in the resolved Snyk org, owner equal to that property value, repository name equal to the GitHub repository name, and branch equal to the import branch. A missing ADO target MUST skip the copy and MUST still leave the GitHub import complete.
 
 The worker MUST NOT deactivate or delete an Azure DevOps Snyk target because a GitHub updated event imported the repository. It MUST NOT deactivate or delete the previous GitHub target. It MUST NOT persist a standing link from the GitHub repository to an ADO project or ADO target. In-flight migration fields cleared at the end of the attempt are not a standing link.
 
@@ -78,7 +78,7 @@ The worker MUST NOT deactivate or delete an Azure DevOps Snyk target because a G
 - **THEN** it runs the GitHub `repo.created` import path for that body's `repository` and records the event as a parsed updated import
 
 #### Scenario: Updated import copies ADO project ignores
-- **WHEN** the GitHub updated event imports a repository and an `azure-repos` target exists for the extracted `azure-devops-project` value, the GitHub repository name, and the import branch
+- **WHEN** `snyk.migrateIgnores` is `true` and the GitHub updated event imports a repository and an `azure-repos` target exists for the extracted `azure-devops-project` value, the GitHub repository name, and the import branch
 - **THEN** the worker copies v1 project ignores from that ADO target onto the new GitHub projects and does not deactivate or delete the ADO target
 
 #### Scenario: Updated import leaves ADO targets in place
@@ -88,3 +88,22 @@ The worker MUST NOT deactivate or delete an Azure DevOps Snyk target because a G
 #### Scenario: Updated import with no ADO target
 - **WHEN** the GitHub updated event imports a repository and no matching `azure-repos` target exists
 - **THEN** the worker completes the GitHub import, skips the ignore copy, and does not fail the message
+
+### Requirement: Operator Snyk settings in config
+The worker MUST load optional `snyk` settings from operator config at startup: `maxConcurrentPendingImports` (default 100), `migrateIgnores` (boolean, default `true`), and `targetRemoval` with keys `onRename`, `onDefaultBranchChange`, and `onRepoDelete` (each `deactivate` or `delete`, default `deactivate`).
+
+Invalid removal mode values MUST cause startup failure. A non-boolean `snyk.migrateIgnores` MUST cause startup failure.
+
+The worker MUST require `SNYK_TOKEN` from the environment when Snyk sync is enabled for mapped ADO processing.
+
+#### Scenario: Default Snyk settings
+- **WHEN** `snyk` section is absent from config
+- **THEN** the worker uses `maxConcurrentPendingImports=100`, `migrateIgnores=true`, and deactivation for all removal actions
+
+#### Scenario: Missing SNYK_TOKEN at startup
+- **WHEN** the worker starts without `SNYK_TOKEN` set
+- **THEN** it exits with a non-zero status and a clear error message
+
+#### Scenario: Migrate ignores disabled
+- **WHEN** `snyk.migrateIgnores` is `false`
+- **THEN** the worker loads that value and skips v1 project-ignore copies
