@@ -96,6 +96,53 @@ def test_repository_state_upsert_replaces_stored_org_id() -> None:
     assert "org-old" not in entity.values()
 
 
+def test_repository_state_round_trips_ignore_migration_fields() -> None:
+    state = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="target-new",
+        default_branch="develop",
+        status="active",
+        desired_state_hash="abc",
+        last_event_id="evt-1",
+        tag_applied=False,
+        import_job_id="job-1",
+        import_status="complete",
+        ignore_migration_kind="rename",
+        ignore_migration_status="pending",
+        ignore_source_org_id="org-old",
+        ignore_source_target_id="target-old",
+        ignore_source_target_reference="main",
+    )
+
+    restored = RepositoryState.from_entity(state.to_entity("ado:project-1", "repo-1"))
+
+    assert restored == state
+    assert restored.ignore_migration_kind == "rename"
+    assert restored.ignore_source_target_id == "target-old"
+
+
+def test_repository_state_clears_ignore_migration_fields() -> None:
+    cleared = RepositoryState(
+        repo_name="demo",
+        snyk_target_id="target-1",
+        default_branch="main",
+        status="active",
+        desired_state_hash="abc",
+        last_event_id="evt-1",
+        tag_applied=False,
+        import_job_id="job-1",
+        import_status="complete",
+    )
+
+    entity = cleared.to_entity("ado:project-1", "repo-1")
+
+    assert entity["ignoreMigrationKind"] == ""
+    assert entity["ignoreMigrationStatus"] == ""
+    assert entity["ignoreSourceOrgId"] == ""
+    assert entity["ignoreSourceTargetId"] == ""
+    assert entity["ignoreSourceTargetReference"] == ""
+
+
 def test_repository_state_from_entity_defaults_import_fields() -> None:
     restored = RepositoryState.from_entity(
         {
@@ -110,3 +157,8 @@ def test_repository_state_from_entity_defaults_import_fields() -> None:
     )
     assert restored.import_job_id == ""
     assert restored.import_status == "pending"
+    assert restored.ignore_migration_kind == ""
+    assert restored.ignore_migration_status == ""
+    assert restored.ignore_source_org_id == ""
+    assert restored.ignore_source_target_id == ""
+    assert restored.ignore_source_target_reference == ""

@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-SyncPhase = Literal["import_poll", "lifecycle_deferred"]
+SyncPhase = Literal["import_poll", "lifecycle_deferred", "ignore_migration"]
 ImportStatusValue = Literal["pending", "failed"]
 
 IMPORT_POLL_PHASE: SyncPhase = "import_poll"
 LIFECYCLE_DEFERRED_PHASE: SyncPhase = "lifecycle_deferred"
+IGNORE_MIGRATION_PHASE: SyncPhase = "ignore_migration"
 IMPORT_JOB_FAILED_REASON = "ImportJobFailed"
+IGNORE_MIGRATION_FAILED_REASON = "IgnoreMigrationFailed"
 MAX_IMPORT_POLL_RETRIES = 5
 IMPORT_POLL_BASE_SECONDS = 30
 IMPORT_POLL_MAX_SECONDS = 900
@@ -43,6 +45,7 @@ class InternalFollowUpMessage:
     default_branch: str | None = None
     payload: dict[str, str] | None = None
     extracted_property_value: str | None = None
+    parsed_updated_import: bool = False
 
 
 def compute_backoff_seconds(
@@ -85,6 +88,32 @@ def build_import_poll_message(
     return body
 
 
+def build_ignore_migration_message(
+    *,
+    source: str,
+    scope_id: str,
+    repository_id: str,
+    source_event_id: str,
+    retry_count: int,
+    ado_project_name: str,
+    extracted_property_value: str | None = None,
+) -> dict[str, Any]:
+    """Build an ``ignore_migration`` follow-up envelope."""
+    body: dict[str, Any] = {
+        "syncPhase": IGNORE_MIGRATION_PHASE,
+        "source": source,
+        "scopeId": scope_id,
+        "repositoryId": repository_id,
+        "sourceEventId": source_event_id,
+        "retryCount": retry_count,
+        "adoProjectName": ado_project_name,
+        "occurredAt": datetime.now(tz=UTC).isoformat(),
+    }
+    if extracted_property_value:
+        body["extractedPropertyValue"] = extracted_property_value
+    return body
+
+
 def build_lifecycle_deferred_message(
     *,
     source: str,
@@ -98,6 +127,7 @@ def build_lifecycle_deferred_message(
     payload: dict[str, str],
     retry_count: int,
     extracted_property_value: str | None = None,
+    parsed_updated_import: bool = False,
 ) -> dict[str, Any]:
     """Build a ``lifecycle_deferred`` follow-up envelope.
 
@@ -120,13 +150,15 @@ def build_lifecycle_deferred_message(
     }
     if extracted_property_value:
         body["extractedPropertyValue"] = extracted_property_value
+    if parsed_updated_import:
+        body["parsedUpdatedImport"] = True
     return body
 
 
 def parse_internal_follow_up(data: dict[str, Any]) -> InternalFollowUpMessage:
     """Parse a validated internal follow-up envelope."""
     sync_phase = data.get("syncPhase")
-    if sync_phase not in {IMPORT_POLL_PHASE, LIFECYCLE_DEFERRED_PHASE}:
+    if sync_phase not in {IMPORT_POLL_PHASE, LIFECYCLE_DEFERRED_PHASE, IGNORE_MIGRATION_PHASE}:
         raise ValueError("unsupported syncPhase")
 
     source = _require_str(data, "source")
@@ -183,6 +215,7 @@ def parse_internal_follow_up(data: dict[str, Any]) -> InternalFollowUpMessage:
             if isinstance(extracted_property_value, str)
             else None
         ),
+        parsed_updated_import=data.get("parsedUpdatedImport") is True,
     )
 
 

@@ -58,7 +58,7 @@ def _is_github_message(data: dict[str, Any]) -> bool:
 
 def _is_internal_message(data: dict[str, Any]) -> bool:
     sync_phase = data.get("syncPhase")
-    return sync_phase in {"import_poll", "lifecycle_deferred"}
+    return sync_phase in {"import_poll", "lifecycle_deferred", "ignore_migration"}
 
 
 def parse_inbound_message(body: str | bytes) -> InboundMessage:

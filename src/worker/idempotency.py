@@ -34,6 +34,31 @@ def is_desired_state_current(state: RepositoryState | None, desired_hash: str) -
     )
 
 
+def parsed_updated_scope_is_current(
+    state: RepositoryState | None,
+    *,
+    parsed_updated_import: bool,
+    resolved_org_id: str,
+    resolved_integration_type: str | None,
+) -> bool:
+    """Return whether a parsed updated import still matches the stored scope.
+
+    A blank stored org is a backfill and does not by itself force a new import.
+    A non-empty stored org id or integration type that differs from the
+    resolution means the desired state is not current.
+    """
+    if not parsed_updated_import or state is None:
+        return True
+    stored_org = (state.snyk_org_id or "").strip()
+    if stored_org and stored_org != resolved_org_id:
+        return False
+    stored_type = (state.snyk_integration_type or "").strip()
+    resolved_type = (resolved_integration_type or "").strip()
+    if stored_type and resolved_type and stored_type != resolved_type:
+        return False
+    return True
+
+
 def has_pending_import(state: RepositoryState | None) -> bool:
     """Return whether a repository already has an in-flight import job."""
     return state is not None and state.import_status == "pending" and bool(state.import_job_id)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ado.client import AdoClient
@@ -26,9 +26,11 @@ from snyk.integration_resolver import IntegrationResolver
 from sync_state.client import SyncStateStore
 from sync_state.entities import RepositoryState
 from worker.followup import (
+    IGNORE_MIGRATION_FAILED_REASON,
     IMPORT_JOB_FAILED_REASON,
     MAX_IMPORT_POLL_RETRIES,
     ScheduledFollowUp,
+    build_ignore_migration_message,
     build_import_poll_message,
     build_lifecycle_deferred_message,
     compute_backoff_seconds,
@@ -40,10 +42,26 @@ from worker.idempotency import (
     has_pending_import,
     is_desired_state_current,
     is_duplicate_event,
+    parsed_updated_scope_is_current,
+)
+from worker.ignore_migration import (
+    IgnoreMigrationError,
+    IgnoreMigrationSnapshot,
+    clear_ignore_migration,
+    copy_v1_project_ignores,
+    empty_migration_fields,
+    log_ignore_migration,
+    migration_state_fields,
+    projects_for_reference,
+    resolve_updated_source_target_id,
+    retire_migration_source,
+    safe_failure_reason,
+    snapshot_state_fields,
 )
 from worker.ignore_policy import IgnorePolicyState
 from worker.import_branch import resolve_import_branch
 from worker.normalize import NormalizedEvent, owner_name, scope_lookup_key
+from worker.project_match import ProjectMatchError
 from worker.target_resolve import (
     TargetLookup,
     ensure_snyk_target_id,
@@ -271,7 +289,13 @@ def _process_normalized_event(
         return _handle_repo_deleted(event, state, resolution=resolution, deps=deps)
 
     desired_hash = _desired_hash_for_event(event, state)
-    if is_desired_state_current(state, desired_hash):
+    scope_current = parsed_updated_scope_is_current(
+        state,
+        parsed_updated_import=event.parsed_updated_import,
+        resolved_org_id=resolution.snyk_org_id,
+        resolved_integration_type=resolution.integration_type,
+    )
+    if is_desired_state_current(state, desired_hash) and scope_current:
         logger.info(
             "Desired state already satisfied event_id=%s repository_id=%s",
             event.event_id,
@@ -309,6 +333,7 @@ def _process_normalized_event(
                 payload=dict(event.payload),
                 retry_count=0,
                 extracted_property_value=event.scope_property_value,
+                parsed_updated_import=event.parsed_updated_import,
             )
             return LifecycleOutcome(
                 scheduled_followups=(
@@ -319,19 +344,18 @@ def _process_normalized_event(
                 ),
             )
 
-        if event.event_type in {"repo.renamed", "repo.default_branch_changed"}:
-            _remove_existing_target_before_reimport(
-                event,
-                state,
-                resolution=resolution,
-                deps=deps,
-            )
-
+        snapshot = _snapshot_ignore_migration(
+            event,
+            state,
+            resolution=resolution,
+            deps=deps,
+        )
         return _start_import(
             event,
             resolution=resolution,
             existing=state,
             deps=deps,
+            snapshot=snapshot,
         )
 
 
@@ -602,6 +626,7 @@ def _process_import_poll(
         import_job_id=import_job_id,
         import_status="complete",
         owner_name=existing.owner_name or scope_lookup_key,
+        **migration_state_fields(existing),
     )
     deps.sync_state.upsert_repository(
         final_state,
@@ -618,11 +643,260 @@ def _process_import_poll(
         import_job_id,
         target_id,
     )
+    if (
+        existing.ignore_migration_kind in {"rename", "default_branch", "updated"}
+        and existing.ignore_migration_status == "pending"
+    ):
+        followup = ScheduledFollowUp(
+            body=build_ignore_migration_message(
+                source=source,
+                scope_id=scope_id,
+                repository_id=repository_id,
+                source_event_id=source_event_id,
+                retry_count=0,
+                ado_project_name=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
+            ),
+            delay_seconds=compute_backoff_seconds(0),
+        )
+        return LifecycleOutcome(scheduled_followups=(followup,))
     return LifecycleOutcome()
 
 
+def process_ignore_migration(
+    *,
+    source: str,
+    scope_id: str,
+    repository_id: str,
+    source_event_id: str,
+    retry_count: int,
+    scope_lookup_key: str,
+    deps: WorkerSyncDependencies,
+    extracted_property_value: str | None = None,
+) -> LifecycleOutcome:
+    """Copy or skip v1 project ignores, then retire the source when required."""
+    with _repository_lock(
+        deps,
+        source=source,
+        scope_id=scope_id,
+        repository_id=repository_id,
+    ):
+        return _process_ignore_migration(
+            source=source,
+            scope_id=scope_id,
+            repository_id=repository_id,
+            source_event_id=source_event_id,
+            retry_count=retry_count,
+            scope_lookup_key=scope_lookup_key,
+            deps=deps,
+            extracted_property_value=extracted_property_value,
+        )
+
+
+def _process_ignore_migration(
+    *,
+    source: str,
+    scope_id: str,
+    repository_id: str,
+    source_event_id: str,
+    retry_count: int,
+    scope_lookup_key: str,
+    deps: WorkerSyncDependencies,
+    extracted_property_value: str | None = None,
+) -> LifecycleOutcome:
+    state = deps.sync_state.get_repository(
+        source=source,
+        scope_id=scope_id,
+        repository_id=repository_id,
+    )
+    if not isinstance(state, RepositoryState) or not state.ignore_migration_kind:
+        return LifecycleOutcome()
+    if state.ignore_migration_status not in {"pending", "complete", "skipped"}:
+        return LifecycleOutcome()
+    if retry_count >= MAX_IMPORT_POLL_RETRIES:
+        log_ignore_migration(
+            source=source,
+            scope_id=scope_id,
+            repository_id=repository_id,
+            ignore_migration_kind=state.ignore_migration_kind,
+            outcome="failed",
+            reason="retry_limit",
+        )
+        return LifecycleOutcome(
+            settlement="dead_letter",
+            dead_letter_reason=IGNORE_MIGRATION_FAILED_REASON,
+            dead_letter_description="v1 project ignore migration exceeded max retries",
+        )
+
+    outcome_name = "skipped" if state.ignore_migration_status == "skipped" else "succeeded"
+    if state.ignore_migration_status == "pending":
+        try:
+            outcome_name = _copy_or_skip_ignores(
+                state,
+                deps=deps,
+                extracted_property_value=extracted_property_value,
+            )
+        except (SnykApiError, ProjectMatchError, IgnoreMigrationError) as exc:
+            log_ignore_migration(
+                source=source,
+                scope_id=scope_id,
+                repository_id=repository_id,
+                ignore_migration_kind=state.ignore_migration_kind,
+                outcome="failed",
+                reason=safe_failure_reason(exc),
+            )
+            return _reschedule_ignore_migration(
+                source=source,
+                scope_id=scope_id,
+                repository_id=repository_id,
+                source_event_id=source_event_id,
+                retry_count=retry_count,
+                scope_lookup_key=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
+            )
+        state = replace(
+            state,
+            ignore_migration_status="skipped" if outcome_name == "skipped" else "complete",
+        )
+        deps.sync_state.upsert_repository(
+            state,
+            source=source,
+            scope_id=scope_id,
+            repository_id=repository_id,
+        )
+
+    if state.ignore_migration_kind in {"rename", "default_branch"}:
+        mode = (
+            deps.snyk_settings.target_removal.on_rename
+            if state.ignore_migration_kind == "rename"
+            else deps.snyk_settings.target_removal.on_default_branch_change
+        )
+        try:
+            retire_migration_source(
+                deps.snyk,
+                kind=state.ignore_migration_kind,
+                mode=mode,
+                org_id=state.ignore_source_org_id or (state.snyk_org_id or ""),
+                target_id=state.ignore_source_target_id,
+                previous_reference=state.ignore_source_target_reference,
+            )
+        except (SnykApiError, IgnoreMigrationError) as exc:
+            log_ignore_migration(
+                source=source,
+                scope_id=scope_id,
+                repository_id=repository_id,
+                ignore_migration_kind=state.ignore_migration_kind,
+                outcome="failed",
+                reason=safe_failure_reason(exc),
+            )
+            return _reschedule_ignore_migration(
+                source=source,
+                scope_id=scope_id,
+                repository_id=repository_id,
+                source_event_id=source_event_id,
+                retry_count=retry_count,
+                scope_lookup_key=scope_lookup_key,
+                extracted_property_value=extracted_property_value,
+            )
+
+    deps.sync_state.upsert_repository(
+        clear_ignore_migration(state),
+        source=source,
+        scope_id=scope_id,
+        repository_id=repository_id,
+    )
+    log_ignore_migration(
+        source=source,
+        scope_id=scope_id,
+        repository_id=repository_id,
+        ignore_migration_kind=state.ignore_migration_kind,
+        outcome=outcome_name,
+    )
+    return LifecycleOutcome()
+
+
+def _copy_or_skip_ignores(
+    state: RepositoryState,
+    *,
+    deps: WorkerSyncDependencies,
+    extracted_property_value: str | None,
+) -> str:
+    """Return ``skipped`` or ``succeeded`` without retiring the source."""
+    if not deps.snyk_settings.migrate_ignores:
+        return "skipped"
+    destination_org_id = state.snyk_org_id or ""
+    if not destination_org_id or not state.snyk_target_id:
+        raise IgnoreMigrationError("destination_target_missing")
+    source_org_id = state.ignore_source_org_id or destination_org_id
+    source_target_id = state.ignore_source_target_id
+    if state.ignore_migration_kind == "updated":
+        source_target_id = (
+            resolve_updated_source_target_id(
+                deps.snyk,
+                org_id=destination_org_id,
+                ado_project=extracted_property_value or "",
+                repo_name=state.repo_name,
+                branch=state.default_branch,
+            )
+            or ""
+        )
+        source_org_id = destination_org_id
+    if not source_target_id:
+        return "skipped"
+    source_projects = deps.snyk.list_projects_for_target(source_org_id, source_target_id)
+    destination_projects = deps.snyk.list_projects_for_target(
+        destination_org_id,
+        state.snyk_target_id,
+    )
+    if state.ignore_migration_kind == "default_branch":
+        source_projects = projects_for_reference(
+            source_projects,
+            target_reference=state.ignore_source_target_reference,
+        )
+        destination_projects = projects_for_reference(
+            destination_projects,
+            target_reference=state.default_branch,
+        )
+    else:
+        source_projects = projects_for_reference(source_projects, target_reference=None)
+        destination_projects = projects_for_reference(destination_projects, target_reference=None)
+    return copy_v1_project_ignores(
+        deps.snyk,
+        source_org_id=source_org_id,
+        source_projects=source_projects,
+        destination_org_id=destination_org_id,
+        destination_projects=destination_projects,
+        import_branch=state.default_branch,
+    )
+
+
+def _reschedule_ignore_migration(
+    *,
+    source: str,
+    scope_id: str,
+    repository_id: str,
+    source_event_id: str,
+    retry_count: int,
+    scope_lookup_key: str,
+    extracted_property_value: str | None,
+) -> LifecycleOutcome:
+    followup = ScheduledFollowUp(
+        body=build_ignore_migration_message(
+            source=source,
+            scope_id=scope_id,
+            repository_id=repository_id,
+            source_event_id=source_event_id,
+            retry_count=retry_count + 1,
+            ado_project_name=scope_lookup_key,
+            extracted_property_value=extracted_property_value,
+        ),
+        delay_seconds=compute_backoff_seconds(retry_count + 1),
+    )
+    return LifecycleOutcome(scheduled_followups=(followup,))
+
+
 def process_lifecycle_deferred(
-    message: dict[str, str | dict[str, str] | int],
+    message: dict[str, str | dict[str, str] | int | bool],
     *,
     deps: WorkerSyncDependencies,
 ) -> LifecycleOutcome:
@@ -869,6 +1143,7 @@ def _start_import(
     resolution: ResolvedScopeMapping,
     existing: RepositoryState | None,
     deps: WorkerSyncDependencies,
+    snapshot: IgnoreMigrationSnapshot | None = None,
 ) -> LifecycleOutcome:
     integration_id = _resolve_integration_id(event, resolution, deps)
     import_branch = resolve_import_branch(event, existing, ado=deps.ado)
@@ -916,6 +1191,16 @@ def _start_import(
             )
             raise
 
+    if snapshot is not None and isinstance(existing, RepositoryState):
+        deps.sync_state.upsert_repository(
+            replace(existing, **snapshot_state_fields(snapshot)),
+            source=event.source,
+            scope_id=event.scope_id,
+            repository_id=event.repository_id,
+        )
+    migration_fields = (
+        snapshot_state_fields(snapshot) if snapshot is not None else empty_migration_fields()
+    )
     pending_state = _repository_state(
         resolution,
         repo_name=event.repository.name,
@@ -928,6 +1213,7 @@ def _start_import(
         import_job_id=job_id,
         import_status="pending",
         owner_name=owner_name(event),
+        **migration_fields,
     )
     deps.sync_state.upsert_repository(
         pending_state,
@@ -948,26 +1234,61 @@ def _start_import(
     return LifecycleOutcome(scheduled_followups=(followup,))
 
 
-def _remove_existing_target_before_reimport(
+def _snapshot_ignore_migration(
     event: NormalizedEvent,
     state: RepositoryState | None,
     *,
     resolution: ResolvedScopeMapping,
     deps: WorkerSyncDependencies,
-) -> None:
-    if event.event_type == "repo.renamed" and not rename_previous_name_resolved(
-        event, state
-    ):
-        logger.info(
-            "Rename previous name unknown; skipping target removal before import "
-            "source=%s scope_id=%s repository_id=%s outcome=rename_previous_name_unknown",
-            event.source,
-            event.scope_id,
-            event.repository_id,
+) -> IgnoreMigrationSnapshot | None:
+    """Capture the migration source before import overwrites target id or branch."""
+    if event.parsed_updated_import:
+        return IgnoreMigrationSnapshot(kind="updated")
+    if event.event_type == "repo.renamed":
+        if not rename_previous_name_resolved(event, state):
+            logger.info(
+                "Rename previous name unknown; skipping target removal before import "
+                "source=%s scope_id=%s repository_id=%s outcome=rename_previous_name_unknown",
+                event.source,
+                event.scope_id,
+                event.repository_id,
+            )
+            return IgnoreMigrationSnapshot(kind="rename")
+        lookup = target_lookup_for_event(event, state)
+        target_id = _resolve_existing_target_id(event, state, resolution=resolution, deps=deps)
+        return IgnoreMigrationSnapshot(
+            kind="rename",
+            source_org_id=resolution.snyk_org_id if target_id else "",
+            source_target_id=target_id or "",
+            source_target_reference=lookup.branch,
         )
-        return
+    if event.event_type == "repo.default_branch_changed":
+        target_id = _resolve_existing_target_id(event, state, resolution=resolution, deps=deps)
+        previous = _previous_branch_reference(
+            event,
+            state,
+            org_id=resolution.snyk_org_id,
+            target_id=target_id or "",
+            deps=deps,
+        )
+        return IgnoreMigrationSnapshot(
+            kind="default_branch",
+            source_org_id=resolution.snyk_org_id if target_id else "",
+            source_target_id=target_id or "",
+            source_target_reference=previous,
+        )
+    return None
+
+
+def _resolve_existing_target_id(
+    event: NormalizedEvent,
+    state: RepositoryState | None,
+    *,
+    resolution: ResolvedScopeMapping,
+    deps: WorkerSyncDependencies,
+) -> str | None:
     lookup = target_lookup_for_event(event, state)
-    stored_id = state.snyk_target_id if state else ""
+    stored_id = state.snyk_target_id if isinstance(state, RepositoryState) else ""
     source_type = _snyk_source_type(
         event.source,
         scope_lookup_key(event),
@@ -975,43 +1296,47 @@ def _remove_existing_target_before_reimport(
         extracted_value=event.scope_property_value,
         resolution=resolution,
     )
-    target_id = ensure_snyk_target_id(
+    return ensure_snyk_target_id(
         resolution.snyk_org_id,
         stored_id=stored_id,
         lookup=lookup,
         snyk=deps.snyk,
         source_type=source_type,
     )
-    if not target_id:
-        logger.info(
-            "No existing Snyk target to remove before reimport source=%s scope_id=%s "
-            "repository_id=%s event_type=%s outcome=target_not_found",
-            event.source,
-            event.scope_id,
-            event.repository_id,
-            event.event_type,
-        )
-        return
 
-    if event.event_type == "repo.renamed":
-        mode = deps.snyk_settings.target_removal.on_rename
-    else:
-        mode = deps.snyk_settings.target_removal.on_default_branch_change
-    _apply_target_removal(
-        org_id=resolution.snyk_org_id,
-        target_id=target_id,
-        mode=mode,
-        deps=deps,
-    )
-    logger.info(
-        "Existing Snyk target removed before reimport source=%s scope_id=%s repository_id=%s "
-        "target_id=%s mode=%s outcome=target_removed",
-        event.source,
-        event.scope_id,
-        event.repository_id,
-        target_id,
-        mode,
-    )
+
+def _previous_branch_reference(
+    event: NormalizedEvent,
+    state: RepositoryState | None,
+    *,
+    org_id: str,
+    target_id: str,
+    deps: WorkerSyncDependencies,
+) -> str:
+    payload_previous = str(event.payload.get("previousDefaultBranch", "")).strip()
+    if payload_previous:
+        return payload_previous
+    new_branch = default_branch_for_event(event)
+    if isinstance(state, RepositoryState) and state.default_branch.strip():
+        stored_branch = state.default_branch.strip()
+        if stored_branch != new_branch:
+            return stored_branch
+    if not target_id:
+        return ""
+    list_projects = getattr(deps.snyk, "list_projects_for_target", None)
+    if not callable(list_projects):
+        return ""
+    projects = list_projects(org_id, target_id)
+    if not isinstance(projects, list):
+        return ""
+    references = {
+        project.target_reference
+        for project in projects
+        if not project.deactivated and project.target_reference and project.target_reference != new_branch
+    }
+    if len(references) == 1:
+        return next(iter(references))
+    return ""
 
 
 def _apply_target_removal(
@@ -1168,6 +1493,7 @@ def _failed_state_from_existing(
     source_event_id: str,
     resolution: ResolvedScopeMapping | None = None,
 ) -> RepositoryState:
+    fields = migration_state_fields(existing)
     if existing is None:
         state = RepositoryState(
             repo_name="",
@@ -1179,6 +1505,7 @@ def _failed_state_from_existing(
             tag_applied=False,
             import_job_id=import_job_id,
             import_status="failed",
+            **fields,
         )
     else:
         state = RepositoryState(
@@ -1192,6 +1519,7 @@ def _failed_state_from_existing(
             import_job_id=import_job_id,
             import_status="failed",
             owner_name=existing.owner_name,
+            **fields,
         )
     if resolution is None:
         return state
@@ -1207,10 +1535,13 @@ def _failed_state_from_existing(
         import_job_id=state.import_job_id,
         import_status=state.import_status,
         owner_name=state.owner_name,
+        **fields,
     )
 
 
-def _event_from_deferred_message(message: dict[str, str | dict[str, str] | int]) -> NormalizedEvent:
+def _event_from_deferred_message(
+    message: dict[str, str | dict[str, str] | int | bool],
+) -> NormalizedEvent:
     from datetime import UTC, datetime
 
     from worker.normalize import AdoScope, GitHubScope, RepositoryRef
@@ -1228,6 +1559,7 @@ def _event_from_deferred_message(message: dict[str, str | dict[str, str] | int])
     lookup_name = str(message["adoProjectName"])
     extracted_raw = message.get("extractedPropertyValue")
     extracted_value = extracted_raw.strip() if isinstance(extracted_raw, str) else None
+    parsed_updated_import = message.get("parsedUpdatedImport") is True
     if source == "github":
         return NormalizedEvent(
             source="github",
@@ -1240,6 +1572,7 @@ def _event_from_deferred_message(message: dict[str, str | dict[str, str] | int])
             github=GitHubScope(org_login=lookup_name),
             payload={str(key): str(value) for key, value in payload.items()},
             scope_property_value=extracted_value or None,
+            parsed_updated_import=parsed_updated_import,
         )
     return NormalizedEvent(
         source="ado",

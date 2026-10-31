@@ -1,6 +1,6 @@
 """Normalize provider payloads into provider-neutral lifecycle events."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
@@ -83,6 +83,7 @@ class NormalizedEvent:
     github: GitHubScope | None = None
     payload: dict[str, str] = field(default_factory=dict)
     scope_property_value: str | None = None
+    parsed_updated_import: bool = False
 
     def __post_init__(self) -> None:
         if self.source == "ado":
@@ -169,7 +170,10 @@ def normalize_github_queue_payload(
     effective_delivery = delivery_id
     if not effective_delivery and isinstance(payload.get("deliveryId"), str):
         effective_delivery = payload["deliveryId"]
-    return normalize_github_repository_event(canonical, delivery_id=effective_delivery)
+    event = normalize_github_repository_event(canonical, delivery_id=effective_delivery)
+    if shape is GitHubMessageShape.PARSED_UPDATED:
+        event = replace(event, parsed_updated_import=True)
+    return event
 
 
 def adapt_github_raw_webhook(payload: dict[str, Any]) -> GitHubCanonicalInput:

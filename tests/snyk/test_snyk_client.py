@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from snyk.client import ImportTarget, SnykApiError, SnykClient
+from snyk.client import ImportTarget, ProjectIgnore, SnykApiError, SnykClient
 
 
 class FakeHTTPResponse:
@@ -373,3 +373,120 @@ def test_rate_limit_retries_then_raises() -> None:
 
     assert job_id == "job-1"
     assert attempts["count"] == 3
+
+
+def test_list_projects_for_target_includes_match_fields() -> None:
+    def opener(request, timeout=30):
+        assert request.get_method() == "GET"
+        assert "/rest/orgs/org-1/projects" in request.full_url
+        query = parse_qs(urlparse(request.full_url).query)
+        assert query.get("target_id") == ["target-1"]
+        return FakeHTTPResponse(
+            200,
+            {
+                "data": [
+                    {
+                        "id": "project-active",
+                        "attributes": {
+                            "type": "npm",
+                            "target_file": "package.json",
+                            "target_reference": "main",
+                            "status": "active",
+                        },
+                    },
+                    {
+                        "id": "project-inactive",
+                        "attributes": {
+                            "type": "pip",
+                            "target_file": "requirements.txt",
+                            "target_reference": "develop",
+                            "status": "inactive",
+                        },
+                    },
+                ],
+            },
+        )
+
+    client = SnykClient("token", opener=opener)
+    projects = client.list_projects_for_target("org-1", "target-1")
+
+    assert projects[0].id == "project-active"
+    assert projects[0].project_type == "npm"
+    assert projects[0].target_file == "package.json"
+    assert projects[0].target_reference == "main"
+    assert projects[0].deactivated is False
+    assert projects[1].deactivated is True
+
+
+def test_add_missing_project_ignores_skips_existing_issue_path() -> None:
+    requests: list[tuple[str, str, bytes | None]] = []
+
+    def opener(request, timeout=30):
+        body = request.data
+        requests.append((request.get_method(), request.full_url, body))
+        if request.get_method() == "GET":
+            return FakeHTTPResponse(
+                200,
+                {
+                    "SNYK-JS-LODASH-1": [
+                        {
+                            "*": {
+                                "reason": "already there",
+                                "reasonType": "wont-fix",
+                                "disregardIfFixable": False,
+                            }
+                        }
+                    ]
+                },
+            )
+        return FakeHTTPResponse(200, {})
+
+    client = SnykClient("token", opener=opener)
+    created = client.add_missing_project_ignores(
+        "org-1",
+        "project-1",
+        [
+            ProjectIgnore(
+                issue_id="SNYK-JS-LODASH-1",
+                path="*",
+                reason="already there",
+                reason_type="wont-fix",
+                disregard_if_fixable=False,
+            ),
+            ProjectIgnore(
+                issue_id="SNYK-JS-ACORN-2",
+                path="src/app.js",
+                reason="false positive",
+                reason_type="not-vulnerable",
+                disregard_if_fixable=True,
+                expires="2026-12-01T00:00:00.000Z",
+            ),
+        ],
+    )
+
+    assert created == 1
+    assert requests[0][0] == "GET"
+    assert requests[0][1].endswith("/v1/org/org-1/project/project-1/ignores")
+    assert requests[1][0] == "POST"
+    assert requests[1][1].endswith("/v1/org/org-1/project/project-1/ignore/SNYK-JS-ACORN-2")
+    posted = json.loads(requests[1][2] or b"{}")
+    assert posted == {
+        "ignorePath": "src/app.js",
+        "reason": "false positive",
+        "reasonType": "not-vulnerable",
+        "disregardIfFixable": True,
+        "expires": "2026-12-01T00:00:00.000Z",
+    }
+    assert "ignoredBy" not in posted
+    assert "created" not in posted
+
+
+def test_delete_project_uses_project_endpoint() -> None:
+    def opener(request, timeout=30):
+        assert request.get_method() == "DELETE"
+        assert "/rest/orgs/org-1/projects/project-1" in request.full_url
+        assert "/targets/" not in request.full_url
+        return FakeHTTPResponse(204, b"")
+
+    client = SnykClient("token", opener=opener)
+    client.delete_project("org-1", "project-1")
