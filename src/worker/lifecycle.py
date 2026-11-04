@@ -799,6 +799,47 @@ def _process_ignore_migration(
                 extracted_property_value=extracted_property_value,
             )
 
+    if state.ignore_migration_kind == "updated":
+        mode = deps.snyk_settings.target_removal.on_update
+        if mode != "none":
+            try:
+                ado_target_id = (
+                    resolve_updated_source_target_id(
+                        deps.snyk,
+                        org_id=state.snyk_org_id or "",
+                        ado_project=extracted_property_value or "",
+                        repo_name=state.repo_name,
+                        branch=state.default_branch,
+                    )
+                    or ""
+                )
+                retire_migration_source(
+                    deps.snyk,
+                    kind="updated",
+                    mode=mode,
+                    org_id=state.snyk_org_id or "",
+                    target_id=ado_target_id,
+                    previous_reference="",
+                )
+            except (SnykApiError, IgnoreMigrationError) as exc:
+                log_ignore_migration(
+                    source=source,
+                    scope_id=scope_id,
+                    repository_id=repository_id,
+                    ignore_migration_kind=state.ignore_migration_kind,
+                    outcome="failed",
+                    reason=safe_failure_reason(exc),
+                )
+                return _reschedule_ignore_migration(
+                    source=source,
+                    scope_id=scope_id,
+                    repository_id=repository_id,
+                    source_event_id=source_event_id,
+                    retry_count=retry_count,
+                    scope_lookup_key=scope_lookup_key,
+                    extracted_property_value=extracted_property_value,
+                )
+
     deps.sync_state.upsert_repository(
         clear_ignore_migration(state),
         source=source,

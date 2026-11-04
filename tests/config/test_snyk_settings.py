@@ -14,6 +14,7 @@ def test_parse_snyk_settings_defaults() -> None:
     assert settings.target_removal.on_default_branch_change == "deactivate"
     assert settings.target_removal.on_repo_delete == "deactivate"
     assert settings.target_removal.on_ignore == "deactivate"
+    assert settings.target_removal.on_update == "none"
     assert settings.migrate_ignores is True
 
 
@@ -33,11 +34,39 @@ def test_parse_snyk_settings_custom_values() -> None:
     assert settings.max_concurrent_pending_imports == 25
     assert settings.target_removal.on_rename == "delete"
     assert settings.target_removal.on_ignore == "delete"
+    assert settings.target_removal.on_update == "none"
 
 
 def test_parse_snyk_settings_rejects_invalid_removal_mode() -> None:
     with pytest.raises(ConfigError, match="onRepoDelete"):
         parse_snyk_settings({"targetRemoval": {"onRepoDelete": "destroy"}})
+
+
+@pytest.mark.parametrize("mode", ["none", "deactivate", "delete"])
+def test_parse_snyk_settings_on_update_modes(mode: str) -> None:
+    settings = parse_snyk_settings({"targetRemoval": {"onUpdate": mode}})
+
+    assert settings.target_removal.on_update == mode
+    assert settings.target_removal.on_rename == "deactivate"
+
+
+def test_parse_snyk_settings_on_update_defaults_when_section_present() -> None:
+    settings = parse_snyk_settings({"targetRemoval": {"onRename": "delete"}})
+
+    assert settings.target_removal.on_update == "none"
+    assert settings.target_removal.on_rename == "delete"
+
+
+def test_parse_snyk_settings_rejects_invalid_on_update() -> None:
+    with pytest.raises(ConfigError, match="onUpdate"):
+        parse_snyk_settings({"targetRemoval": {"onUpdate": "destroy"}})
+    with pytest.raises(ConfigError, match="onUpdate"):
+        parse_snyk_settings({"targetRemoval": {"onUpdate": "skip"}})
+
+
+def test_parse_snyk_settings_rejects_none_for_other_removal_keys() -> None:
+    with pytest.raises(ConfigError, match="onRename"):
+        parse_snyk_settings({"targetRemoval": {"onRename": "none"}})
 
 
 def test_parse_snyk_settings_migrate_ignores_explicit_values() -> None:
