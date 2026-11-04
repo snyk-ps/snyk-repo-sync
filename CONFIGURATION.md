@@ -90,7 +90,7 @@ Individual settings MAY be overridden by environment variables; **env values tak
 
 `serviceBus` (the default) puts GitHub events, ADO events, and internal follow-ups (`import_poll`, `lifecycle_deferred`) on one Service Bus queue.
 
-`kafka` is a GitHub-only deployment path. The event connector reads Kafka and sends provider-native JSON to `POST /github-events`. The worker processes each request synchronously. It returns `204 No Content` only after lifecycle processing and durable scheduling of every requested follow-up succeed. The connector must retry every non-2xx response according to its policy.
+`kafka` is a GitHub-only deployment path. The event connector reads Kafka and sends provider-native JSON to `POST /github-events`. The worker processes each request synchronously. It returns `204 No Content` with an empty body only after lifecycle processing and durable scheduling of every requested follow-up succeed. Every non-2xx response uses `Content-Type: application/json` and a JSON object with string fields `failureKind`, `reason`, and `description`. The connector must retry every non-2xx response from the status code. It does not use the response body to decide whether to retry.
 
 The endpoint has no application authentication. Do not expose it publicly. Provide a customer-managed private route that allows only the event connector to reach the configured host and port. TLS termination and network policy are deployment responsibilities.
 
