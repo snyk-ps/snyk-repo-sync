@@ -83,3 +83,4 @@ snyk:
     onDefaultBranchChange: deactivate
     onRepoDelete: deactivate
     onIgnore: deactivate
+    onUpdate: none                   # none | deactivate | delete

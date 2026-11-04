@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 from config.snyk_settings import SnykSettings, TargetRemovalSettings
 from snyk.client import ProjectIgnore, SnykApiError, SnykProject
 from sync_state.entities import RepositoryState
-from worker.ignore_migration import copy_v1_project_ignores, projects_for_reference
+from worker.ignore_migration import (
+    copy_v1_project_ignores,
+    projects_for_reference,
+    retire_migration_source,
+)
 from worker.lifecycle import WorkerSyncDependencies, process_ignore_migration, process_import_poll
 
 
@@ -67,6 +71,7 @@ def _deps(
     migrate_ignores: bool = True,
     on_rename: str = "deactivate",
     on_default_branch_change: str = "deactivate",
+    on_update: str = "none",
 ) -> WorkerSyncDependencies:
     sync_state = MagicMock()
     sync_state.get_repository.return_value = state
@@ -84,6 +89,7 @@ def _deps(
                 on_default_branch_change=on_default_branch_change,  # type: ignore[arg-type]
                 on_repo_delete="deactivate",
                 on_ignore="deactivate",
+                on_update=on_update,  # type: ignore[arg-type]
             ),
             migrate_ignores=migrate_ignores,
         ),
@@ -393,6 +399,7 @@ def test_updated_copies_from_ado_target_and_does_not_deactivate(caplog) -> None:
             default_branch="main",
         ),
         snyk=snyk,
+        on_update="none",
     )
 
     with caplog.at_level("INFO"):
@@ -434,6 +441,243 @@ def test_updated_missing_ado_target_skips(caplog) -> None:
     snyk.list_project_ignores.assert_not_called()
     snyk.deactivate_project.assert_not_called()
     assert "outcome=skipped" in caplog.text
+
+
+def _updated_state(**overrides: object) -> RepositoryState:
+    state = _state(
+        ignore_migration_kind="updated",
+        ignore_source_target_id="",
+        ignore_source_org_id="",
+        ignore_source_target_reference="",
+        repo_name="sample-repo",
+        default_branch="main",
+        snyk_target_id="target-new",
+    )
+    return replace(state, **overrides)  # type: ignore[arg-type]
+
+
+def _ado_lookup_args() -> dict[str, str]:
+    return {
+        "owner": "sample-project",
+        "repo_name": "sample-repo",
+        "branch": "main",
+        "source_type": "azure-repos",
+    }
+
+
+def test_retire_updated_none_and_blank_target_do_not_call_snyk() -> None:
+    snyk = MagicMock()
+
+    retire_migration_source(
+        snyk,
+        kind="updated",
+        mode="none",
+        org_id="org-1",
+        target_id="ado-target",
+        previous_reference="",
+    )
+    retire_migration_source(
+        snyk,
+        kind="updated",
+        mode="delete",
+        org_id="org-1",
+        target_id="  ",
+        previous_reference="",
+    )
+
+    snyk.delete_snyk_target.assert_not_called()
+    snyk.deactivate_all_projects_for_target.assert_not_called()
+
+
+def test_retire_updated_delete_404_is_already_gone() -> None:
+    snyk = MagicMock()
+    snyk.delete_snyk_target.side_effect = SnykApiError("missing", status_code=404)
+
+    retire_migration_source(
+        snyk,
+        kind="updated",
+        mode="delete",
+        org_id="org-1",
+        target_id="ado-target",
+        previous_reference="",
+    )
+
+    snyk.delete_snyk_target.assert_called_once_with("org-1", "ado-target")
+    snyk.deactivate_all_projects_for_target.assert_not_called()
+
+
+def test_updated_copy_then_deletes_ado_target() -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = "ado-target"
+    snyk.list_projects_for_target.side_effect = [
+        [_project("ado", target_reference="main")],
+        [_project("gh", target_reference="main")],
+    ]
+    snyk.list_project_ignores.side_effect = [[_ignore()], []]
+    deps = _deps(state=_updated_state(), snyk=snyk, on_update="delete")
+
+    outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.settlement == "complete"
+    assert outcome.scheduled_followups == ()
+    snyk.add_missing_project_ignores.assert_called_once()
+    assert snyk.find_target_id.call_count == 2
+    snyk.find_target_id.assert_called_with("org-1", **_ado_lookup_args())
+    snyk.delete_snyk_target.assert_called_once_with("org-1", "ado-target")
+    snyk.deactivate_all_projects_for_target.assert_not_called()
+    snyk.start_import.assert_not_called()
+    saved = deps.sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert saved.snyk_target_id == "target-new"
+    assert saved.ignore_migration_kind == ""
+    assert saved.ignore_source_target_id == ""
+    stored_ids = [
+        call.args[0].ignore_source_target_id
+        for call in deps.sync_state.upsert_repository.call_args_list
+    ]
+    assert stored_ids == ["", ""]
+
+
+def test_updated_skip_then_deactivates_ado_target() -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = "ado-target"
+    deps = _deps(
+        state=_updated_state(),
+        snyk=snyk,
+        migrate_ignores=False,
+        on_update="deactivate",
+    )
+
+    outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.settlement == "complete"
+    snyk.list_project_ignores.assert_not_called()
+    snyk.add_missing_project_ignores.assert_not_called()
+    snyk.find_target_id.assert_called_once_with("org-1", **_ado_lookup_args())
+    snyk.deactivate_all_projects_for_target.assert_called_once_with("org-1", "ado-target")
+    snyk.delete_snyk_target.assert_not_called()
+    snyk.deactivate_project.assert_not_called()
+    saved = deps.sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert saved.ignore_migration_kind == ""
+    assert saved.ignore_source_target_id == ""
+    assert saved.snyk_target_id == "target-new"
+
+
+def test_updated_nothing_to_copy_still_deactivates_ado_target() -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = "ado-target"
+    snyk.list_projects_for_target.return_value = [_project("ado")]
+    snyk.list_project_ignores.return_value = []
+    deps = _deps(state=_updated_state(), snyk=snyk, on_update="deactivate")
+
+    outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.settlement == "complete"
+    snyk.list_project_ignores.assert_called_once_with("org-1", "ado")
+    snyk.add_missing_project_ignores.assert_not_called()
+    snyk.deactivate_all_projects_for_target.assert_called_once_with("org-1", "ado-target")
+    snyk.delete_snyk_target.assert_not_called()
+
+
+def test_updated_missing_target_skips_retirement_when_delete_configured() -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = None
+    deps = _deps(state=_updated_state(), snyk=snyk, on_update="delete")
+
+    outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.settlement == "complete"
+    assert snyk.find_target_id.call_count == 2
+    snyk.delete_snyk_target.assert_not_called()
+    snyk.deactivate_all_projects_for_target.assert_not_called()
+    snyk.list_project_ignores.assert_not_called()
+    saved = deps.sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert saved.ignore_migration_kind == ""
+    assert saved.ignore_source_target_id == ""
+    assert saved.snyk_target_id == "target-new"
+
+
+def test_updated_copy_failure_does_not_retire(caplog) -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = "ado-target"
+    snyk.list_projects_for_target.return_value = [_project("ado")]
+    snyk.list_project_ignores.side_effect = SnykApiError(
+        "secret-ignore-text leaked",
+        status_code=500,
+    )
+    deps = _deps(state=_updated_state(), snyk=snyk, on_update="delete")
+
+    with caplog.at_level("ERROR"):
+        outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.scheduled_followups[0].body["syncPhase"] == "ignore_migration"
+    assert outcome.scheduled_followups[0].body["retryCount"] == 1
+    snyk.find_target_id.assert_called_once()
+    snyk.delete_snyk_target.assert_not_called()
+    snyk.deactivate_all_projects_for_target.assert_not_called()
+    snyk.start_import.assert_not_called()
+    assert "outcome=failed" in caplog.text
+    assert "secret-ignore-text" not in caplog.text
+
+
+def test_updated_retirement_failure_retries_without_another_import() -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = "ado-target"
+    snyk.list_projects_for_target.side_effect = [
+        [_project("ado", target_reference="main")],
+        [_project("gh", target_reference="main")],
+    ]
+    snyk.list_project_ignores.side_effect = [[_ignore()], []]
+    snyk.delete_snyk_target.side_effect = SnykApiError("unavailable", status_code=500)
+    deps = _deps(state=_updated_state(), snyk=snyk, on_update="delete")
+
+    outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.scheduled_followups[0].body["syncPhase"] == "ignore_migration"
+    assert outcome.scheduled_followups[0].body["retryCount"] == 1
+    snyk.delete_snyk_target.assert_called_once_with("org-1", "ado-target")
+    snyk.start_import.assert_not_called()
+    snyk.add_missing_project_ignores.assert_called_once()
+    saved = deps.sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert saved.ignore_migration_kind == "updated"
+    assert saved.ignore_migration_status == "complete"
+    assert saved.ignore_source_target_id == ""
+    assert saved.snyk_target_id == "target-new"
+
+    snyk.delete_snyk_target.side_effect = None
+    snyk.delete_snyk_target.reset_mock()
+    deps.sync_state.get_repository.return_value = saved
+    outcome = _run(deps, retry_count=1, extracted="sample-project")
+
+    assert outcome.settlement == "complete"
+    assert outcome.scheduled_followups == ()
+    snyk.delete_snyk_target.assert_called_once_with("org-1", "ado-target")
+    snyk.add_missing_project_ignores.assert_called_once()
+    snyk.start_import.assert_not_called()
+    cleared = deps.sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert cleared.ignore_migration_kind == ""
+    assert cleared.ignore_source_target_id == ""
+    assert cleared.snyk_target_id == "target-new"
+
+
+def test_updated_delete_404_finishes_without_reschedule() -> None:
+    snyk = MagicMock()
+    snyk.find_target_id.return_value = "ado-target"
+    snyk.list_projects_for_target.side_effect = [
+        [_project("ado", target_reference="main")],
+        [_project("gh", target_reference="main")],
+    ]
+    snyk.list_project_ignores.side_effect = [[_ignore()], []]
+    snyk.delete_snyk_target.side_effect = SnykApiError("missing", status_code=404)
+    deps = _deps(state=_updated_state(), snyk=snyk, on_update="delete")
+
+    outcome = _run(deps, extracted="sample-project")
+
+    assert outcome.settlement == "complete"
+    assert outcome.scheduled_followups == ()
+    snyk.delete_snyk_target.assert_called_once_with("org-1", "ado-target")
+    saved = deps.sync_state.upsert_repository.call_args_list[-1].args[0]
+    assert saved.ignore_migration_kind == ""
+    assert saved.snyk_target_id == "target-new"
 
 
 def test_unmatched_ignores_do_not_retire() -> None:

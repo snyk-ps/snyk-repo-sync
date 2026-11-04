@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from config.snyk_settings import RemovalMode
+from config.snyk_settings import UpdateRemovalMode
 from snyk.client import ProjectIgnore, SnykApiError, SnykClient, SnykProject
 from sync_state.entities import RepositoryState
 from worker.project_match import ProjectMatchError, match_projects
@@ -212,27 +212,29 @@ def retire_migration_source(
     snyk: SnykClient,
     *,
     kind: str,
-    mode: RemovalMode,
+    mode: UpdateRemovalMode,
     org_id: str,
     target_id: str,
     previous_reference: str,
 ) -> None:
-    """Retire a rename target or the previous branch's projects.
+    """Retire a rename target, an updated Azure DevOps target, or previous-branch projects.
 
-    A missing target id does not call Snyk. Default-branch ``delete`` deletes
-    projects and leaves the target in place. HTTP 404 is treated as already gone.
+    Kind ``updated`` uses the same whole-target path as rename when ``mode`` is
+    ``deactivate`` or ``delete``. ``none`` and a blank target id do not call
+    Snyk. Default-branch ``delete`` deletes projects and leaves the target in
+    place. HTTP 404 is treated as already gone.
 
     Raises:
         SnykApiError: When retirement fails for a reason other than not found.
         IgnoreMigrationError: When a default-branch source reference is unknown.
     """
-    if kind not in {"rename", "default_branch"}:
+    if kind not in {"rename", "default_branch", "updated"}:
         return
-    if not target_id.strip():
+    if mode == "none" or not target_id.strip():
         return
     if kind == "default_branch" and not previous_reference.strip():
         raise IgnoreMigrationError("previous_branch_unknown")
-    if kind == "rename":
+    if kind in {"rename", "updated"}:
         if mode == "delete":
             _ignore_missing(lambda: snyk.delete_snyk_target(org_id, target_id))
             return

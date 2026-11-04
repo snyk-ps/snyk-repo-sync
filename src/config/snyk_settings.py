@@ -6,7 +6,9 @@ from typing import Literal
 from config.errors import ConfigError
 
 RemovalMode = Literal["deactivate", "delete"]
+UpdateRemovalMode = Literal["deactivate", "delete", "none"]
 VALID_REMOVAL_MODES = frozenset({"deactivate", "delete"})
+VALID_UPDATE_REMOVAL_MODES = frozenset({"deactivate", "delete", "none"})
 DEFAULT_MAX_CONCURRENT_PENDING_IMPORTS = 100
 
 
@@ -18,6 +20,7 @@ class TargetRemovalSettings:
     on_default_branch_change: RemovalMode
     on_repo_delete: RemovalMode
     on_ignore: RemovalMode
+    on_update: UpdateRemovalMode = "none"
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,17 @@ def _parse_removal_mode(value: object, label: str) -> RemovalMode:
     mode = value.strip()
     if mode not in VALID_REMOVAL_MODES:
         raise ConfigError(f"{label} must be 'deactivate' or 'delete'")
+    return mode  # type: ignore[return-value]
+
+
+def _parse_update_removal_mode(value: object, label: str) -> UpdateRemovalMode:
+    if value is None:
+        return "none"
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigError(f"{label} must be 'none', 'deactivate', or 'delete'")
+    mode = value.strip()
+    if mode not in VALID_UPDATE_REMOVAL_MODES:
+        raise ConfigError(f"{label} must be 'none', 'deactivate', or 'delete'")
     return mode  # type: ignore[return-value]
 
 
@@ -78,6 +92,7 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
                 on_default_branch_change="deactivate",
                 on_repo_delete="deactivate",
                 on_ignore="deactivate",
+                on_update="none",
             ),
             migrate_ignores=True,
         )
@@ -91,6 +106,7 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
             on_default_branch_change="deactivate",
             on_repo_delete="deactivate",
             on_ignore="deactivate",
+            on_update="none",
         )
     elif not isinstance(target_removal_raw, dict):
         raise ConfigError("snyk.targetRemoval must be a mapping")
@@ -111,6 +127,10 @@ def parse_snyk_settings(raw: object) -> SnykSettings:
             on_ignore=_parse_removal_mode(
                 target_removal_raw.get("onIgnore"),
                 "snyk.targetRemoval.onIgnore",
+            ),
+            on_update=_parse_update_removal_mode(
+                target_removal_raw.get("onUpdate"),
+                "snyk.targetRemoval.onUpdate",
             ),
         )
 
