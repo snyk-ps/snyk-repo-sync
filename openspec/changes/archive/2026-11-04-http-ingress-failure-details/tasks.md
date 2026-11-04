@@ -17,4 +17,4 @@
 
 ## 4. Archive
 
-- [ ] 4.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/http-ingress-failure-details/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive http-ingress-failure-details` (or project equivalent) to fold deltas into canonical specs.
+- [x] 4.1 Merge `openspec/specs/` only when archiving: do **not** copy or merge `openspec/changes/http-ingress-failure-details/specs/*.md` into `openspec/specs/` during implementation; run `openspec archive http-ingress-failure-details` (or project equivalent) to fold deltas into canonical specs.
