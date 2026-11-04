@@ -62,13 +62,13 @@ class GitHubEventsApp:
         if scope.get("type") != "http":
             raise ValueError("GitHubEventsApp supports ASGI HTTP scopes only")
         if scope.get("path") != "/github-events":
-            await _respond(send, 404)
+            await _respond_boundary(send, 404)
             return
         if scope.get("method") != "POST":
-            await _respond(send, 405)
+            await _respond_boundary(send, 405)
             return
         if not _is_json_content_type(scope.get("headers", [])):
-            await _respond(send, 415)
+            await _respond_boundary(send, 415)
             return
 
         try:
@@ -77,12 +77,12 @@ class GitHubEventsApp:
                 maximum_bytes=self._settings.max_request_body_bytes,
             )
         except _RequestTooLarge:
-            await _respond(send, 413)
+            await _respond_boundary(send, 413)
             return
 
         boundary_status = _validate_github_boundary(body)
         if boundary_status is not None:
-            await _respond(send, boundary_status)
+            await _respond_boundary(send, boundary_status)
             return
 
         try:
@@ -90,17 +90,44 @@ class GitHubEventsApp:
                 outcome = await asyncio.to_thread(self._process_and_schedule, body)
         except _FollowUpSchedulingError as exc:
             logger.error("Failed to schedule HTTP ingress follow-up: %s", exc)
-            await _respond(send, 503)
+            await _respond_failure(
+                send,
+                503,
+                failure_kind="dependency",
+                reason="FollowUpSchedulingError",
+                description=str(exc),
+            )
             return
-        except Exception:
+        except Exception as exc:
             logger.exception("Unexpected GitHub HTTP ingress processing failure")
-            await _respond(send, 500)
+            await _respond_failure(
+                send,
+                500,
+                failure_kind="processing",
+                reason="UnexpectedError",
+                description=str(exc),
+            )
             return
 
         if outcome.status == "completed":
-            await _respond(send, 204)
+            await _respond_empty(send, 204)
             return
-        await _respond(send, _failure_status(outcome))
+        description = outcome.description or ""
+        failure_kind = outcome.failure_kind or ""
+        reason = outcome.reason or ""
+        logger.error(
+            "HTTP ingress processing failure failure_kind=%s reason=%s description=%s",
+            failure_kind,
+            reason,
+            description,
+        )
+        await _respond_failure(
+            send,
+            _failure_status(outcome),
+            failure_kind=failure_kind,
+            reason=reason,
+            description=description,
+        )
 
     def _process_and_schedule(self, body: bytes) -> ProcessingOutcome:
         outcome = process_message_body(
@@ -179,7 +206,63 @@ def _failure_status(outcome: ProcessingOutcome) -> int:
     return 500
 
 
-async def _respond(send: Send, status: int) -> None:
+_BOUNDARY_FAILURES: dict[int, tuple[str, str, str]] = {
+    400: (
+        "invalid_message",
+        "InvalidJson",
+        "Request body must be a JSON object.",
+    ),
+    404: (
+        "request",
+        "NotFound",
+        "The requested path was not found.",
+    ),
+    405: (
+        "request",
+        "MethodNotAllowed",
+        "The requested method is not allowed.",
+    ),
+    413: (
+        "request",
+        "RequestTooLarge",
+        "The request body exceeds the configured limit.",
+    ),
+    415: (
+        "request",
+        "UnsupportedMediaType",
+        "Content-Type must be application/json.",
+    ),
+    422: (
+        "invalid_message",
+        "UnsupportedPayload",
+        "The payload is not a supported GitHub event.",
+    ),
+}
+
+
+def _error_document(*, failure_kind: str, reason: str, description: str) -> bytes:
+    """Return the JSON body for a non-2xx GitHub events response."""
+    return json.dumps(
+        {
+            "failureKind": failure_kind,
+            "reason": reason,
+            "description": description,
+        }
+    ).encode()
+
+
+async def _respond_boundary(send: Send, status: int) -> None:
+    failure_kind, reason, description = _BOUNDARY_FAILURES[status]
+    await _respond_failure(
+        send,
+        status,
+        failure_kind=failure_kind,
+        reason=reason,
+        description=description,
+    )
+
+
+async def _respond_empty(send: Send, status: int) -> None:
     await send(
         {
             "type": "http.response.start",
@@ -188,3 +271,29 @@ async def _respond(send: Send, status: int) -> None:
         }
     )
     await send({"type": "http.response.body", "body": b""})
+
+
+async def _respond_failure(
+    send: Send,
+    status: int,
+    *,
+    failure_kind: str,
+    reason: str,
+    description: str,
+) -> None:
+    body = _error_document(
+        failure_kind=failure_kind,
+        reason=reason,
+        description=description,
+    )
+    await send(
+        {
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"content-length", str(len(body)).encode("ascii")),
+            ],
+        }
+    )
+    await send({"type": "http.response.body", "body": body})

@@ -60,7 +60,7 @@ All ADO Git repository lifecycle events use the **audit stream** exclusively. Gi
 Some GitHub deployments set `messaging.transport: kafka`. On that path:
 
 - The event connector reads GitHub lifecycle events from Kafka and sends the provider-native JSON body to `POST /github-events`.
-- The worker returns `204 No Content` only after synchronous lifecycle processing and durable follow-up scheduling succeed. The connector must retry every non-2xx response.
+- The worker returns `204 No Content` with an empty body only after synchronous lifecycle processing and durable follow-up scheduling succeed. Every non-2xx response uses `Content-Type: application/json` and a JSON object with string fields `failureKind`, `reason`, and `description`. The connector must retry every non-2xx response from the status code. It does not use the response body to decide whether to retry.
 - `import_poll` and `lifecycle_deferred` messages go to a pre-provisioned Azure Storage queue in the **same storage account** as the sync-state table. Provision that queue and a poison queue (`{queueName}-poison` unless overridden). The worker does not create them.
 - ADO audit ingestion stays on the Service Bus path above.
 - The worker does not publish to Kafka or copy inbound GitHub bodies to the Storage Queue.
